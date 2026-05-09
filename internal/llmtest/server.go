@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -38,7 +39,9 @@ func NewServer() *Server {
 	s.cond = sync.NewCond(&s.mu)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.handleChat)
+	mux.HandleFunc("/chat/completions", s.handleChat)
 	mux.HandleFunc("/v1/responses", s.handleResponses)
+	mux.HandleFunc("/responses", s.handleResponses)
 	s.srv = httptest.NewServer(mux)
 	return s
 }
@@ -62,6 +65,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var reqBody map[string]any
 	json.Unmarshal(body, &reqBody)
 
+	isStream := false
+	if v, ok := reqBody["stream"].(bool); ok {
+		isStream = v
+	}
+
 	s.mu.Lock()
 	s.inputs = append(s.inputs, callRecord{Body: reqBody, URL: r.URL.String()})
 	callNum := atomic.AddInt64(&s.calls, 1)
@@ -69,7 +77,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	resp := s.nextResponse()
-	s.writeStreamingResponse(w, resp, callNum, r.Context())
+	if isStream {
+		s.writeStreamingResponse(w, resp, callNum, r.Context())
+	} else {
+		s.writeJSONResponse(w, resp, callNum)
+	}
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -275,6 +287,86 @@ func (s *Server) writeStreamingResponse(w http.ResponseWriter, resp response, ca
 			"prompt_tokens":     50,
 			"completion_tokens": 50,
 			"total_tokens":      100,
+		},
+	})
+}
+
+func (s *Server) writeJSONResponse(w http.ResponseWriter, resp response, callNum int64) {
+	if resp.kind == "hang" {
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{}})
+		return
+	}
+	if resp.kind == "error" {
+		code := 500
+		if c, ok := resp.data["status"].(float64); ok {
+			code = int(c)
+		}
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(resp.data)
+		return
+	}
+
+	text, _ := resp.data["text"].(string)
+	parts, _ := resp.data["parts"].([]map[string]any)
+
+	var msg map[string]any
+	if len(parts) > 0 {
+		var content []map[string]any
+		var toolCalls []map[string]any
+
+		for _, part := range parts {
+			switch part["type"] {
+			case "text":
+				content = append(content, map[string]any{"type": "text", "text": part["text"]})
+			case "tool_use":
+				args, _ := json.Marshal(part["arguments"])
+				toolCalls = append(toolCalls, map[string]any{
+					"id":   part["id"],
+					"type": "function",
+					"function": map[string]any{
+						"name":      part["name"],
+						"arguments": string(args),
+					},
+				})
+			}
+		}
+
+		if text == "" && len(content) > 0 {
+			var b strings.Builder
+			for _, c := range content {
+				if t, ok := c["text"].(string); ok {
+					b.WriteString(t)
+				}
+			}
+			text = b.String()
+		}
+
+		msg = map[string]any{"role": "assistant", "content": text}
+		if len(toolCalls) > 0 {
+			msg["tool_calls"] = toolCalls
+		}
+	} else {
+		msg = map[string]any{"role": "assistant", "content": text}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":      fmt.Sprintf("chatcmpl-%d", callNum),
+		"object":  "chat.completion",
+		"created": callNum,
+		"model":   resp.data["model"],
+		"choices": []map[string]any{
+			{
+				"index":         0,
+				"message":       msg,
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]any{
+			"prompt_tokens":     10,
+			"completion_tokens": 10,
+			"total_tokens":      20,
 		},
 	})
 }

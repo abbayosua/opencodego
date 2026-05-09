@@ -99,7 +99,7 @@ func TestServerReplyBuilder(t *testing.T) {
 	s.Reply().Reason("think").Text("answer").Tool("bash", map[string]any{"cmd": "ls"}).Item()
 
 	resp, err := http.Post(s.URL()+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}]}`))
+		strings.NewReader(`{"model":"test","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,14 +118,13 @@ func TestServerReadmeExample(t *testing.T) {
 	s := NewForTest(t)
 	s.Reply().Reason("thinking...").Text("Hello!").Tool("bash", map[string]any{"cmd": "ls"}).Item()
 
-	data, _ := json.Marshal(map[string]any{
-		"model": "test",
-		"messages": []map[string]any{
-			{"role": "user", "content": "list files"},
-		},
+	reqData, _ := json.Marshal(map[string]any{
+		"model":    "test",
+		"stream":   true,
+		"messages": []map[string]any{{"role": "user", "content": "list files"}},
 	})
 
-	resp, err := http.Post(s.URL()+"/v1/chat/completions", "application/json", strings.NewReader(string(data)))
+	resp, err := http.Post(s.URL()+"/v1/chat/completions", "application/json", strings.NewReader(string(reqData)))
 	if err != nil {
 		t.Fatal(err)
 	}
