@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/opencode-go/opencode/internal/llm"
+	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/tool"
 )
 
@@ -25,25 +29,11 @@ func main() {
 	reg.Register(tool.GlobTool())
 
 	ctx := context.Background()
-	toolCtx := tool.Context{
-		Context: ctx,
-	}
+	toolCtx := tool.Context{Context: ctx}
 
 	switch os.Args[1] {
 	case "run":
-		prompt := "No prompt provided"
-		if len(os.Args) > 2 {
-			prompt = os.Args[2]
-		}
-		fmt.Fprintf(os.Stderr, "Prompt: %s\n\n", prompt)
-
-		defs, err := reg.All()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading tools: %v\n", err)
-			os.Exit(1)
-		}
-		data, _ := json.MarshalIndent(defs, "", "  ")
-		fmt.Println(string(data))
+		runCmd(flag.NewFlagSet("run", flag.ContinueOnError), reg)
 
 	case "tools":
 		for _, id := range reg.List() {
@@ -92,9 +82,85 @@ func main() {
 	}
 }
 
+type runConfig struct {
+	model   string
+	apiURL  string
+	apiKey  string
+	maxTurn int
+}
+
+func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
+	cfg := runConfig{
+		model:   envOr("OPENCODE_MODEL", "gpt-4o"),
+		apiURL:  envOr("OPENCODE_API_URL", "https://api.openai.com/v1"),
+		apiKey:  os.Getenv("OPENCODE_API_KEY"),
+		maxTurn: 25,
+	}
+
+	fs.StringVar(&cfg.model, "model", cfg.model, "LLM model name")
+	fs.StringVar(&cfg.apiURL, "api-url", cfg.apiURL, "LLM API base URL")
+	fs.StringVar(&cfg.apiKey, "api-key", cfg.apiKey, "LLM API key")
+	fs.IntVar(&cfg.maxTurn, "max-turns", cfg.maxTurn, "max conversation turns")
+
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	prompt := strings.Join(fs.Args(), " ")
+	if prompt == "" {
+		prompt = envOr("OPENCODE_PROMPT", "")
+	}
+	if prompt == "" {
+		fmt.Fprintf(os.Stderr, "Usage: opencode run [flags] <prompt>\n")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	if cfg.apiKey == "" {
+		fmt.Fprintf(os.Stderr, "Error: OPENCODE_API_KEY not set and --api-key not provided\n")
+		os.Exit(1)
+	}
+
+	client := llm.NewClient(cfg.apiURL)
+	client.SetAPIKey(cfg.apiKey)
+
+	system := "You are a helpful AI assistant with access to tools. Use them to accomplish tasks accurately."
+	proc := session.NewProcessor(reg, client, cfg.model, system)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	fmt.Fprintf(os.Stderr, "🧠 Running: %s\n", prompt)
+	fmt.Fprintf(os.Stderr, "   Model:   %s\n", cfg.model)
+	fmt.Fprintf(os.Stderr, "   API:     %s\n", cfg.apiURL)
+	fmt.Fprintf(os.Stderr, "\n")
+
+	start := time.Now()
+	result, err := proc.Run(ctx, prompt)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "\n⏱️  Timeout after %v\n", elapsed)
+		} else {
+			fmt.Fprintf(os.Stderr, "\n❌ Error: %v\n", err)
+		}
+		os.Exit(1)
+	}
+
+	if result.FinalText != "" {
+		fmt.Println(result.FinalText)
+	}
+
+	if result.ToolCalls > 0 {
+		fmt.Fprintf(os.Stderr, "\n🔧 Tool calls: %d\n", result.ToolCalls)
+	}
+
+	fmt.Fprintf(os.Stderr, "✅ Done in %v\n", elapsed.Round(time.Millisecond))
+}
+
 func decodeArg(raw string) (map[string]any, error) {
-	// On Windows, cmd.exe and PowerShell may strip outer quotes.
-	// Try to parse as-is first, then fall back to quote-stripped.
 	var args map[string]any
 	if err := json.Unmarshal([]byte(raw), &args); err == nil {
 		return args, nil
@@ -107,4 +173,11 @@ func decodeArg(raw string) (map[string]any, error) {
 		}
 	}
 	return nil, fmt.Errorf("cannot parse JSON: %s", raw)
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

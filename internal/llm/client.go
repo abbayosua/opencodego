@@ -86,6 +86,7 @@ type openAIFunction struct {
 
 type Client struct {
 	baseURL string
+	apiKey  string
 	client  *http.Client
 }
 
@@ -94,6 +95,10 @@ func NewClient(baseURL string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{},
 	}
+}
+
+func (c *Client) SetAPIKey(key string) {
+	c.apiKey = key
 }
 
 func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan Event, <-chan error) {
@@ -117,6 +122,9 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan Event, <
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
 
 		resp, err := c.client.Do(httpReq)
 		if err != nil {
