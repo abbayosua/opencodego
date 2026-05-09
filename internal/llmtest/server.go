@@ -30,6 +30,7 @@ type Server struct {
 	queue   []response
 	calls   int64
 	inputs  []callRecord
+	toolN   int64
 
 	closed bool
 }
@@ -383,11 +384,16 @@ func (s *Server) Text(text string) {
 }
 
 func (s *Server) Tool(name string, args map[string]any) {
+	s.mu.Lock()
+	s.toolN++
+	toolID := fmt.Sprintf("call_%s_%d", name, s.toolN)
+	s.mu.Unlock()
+
 	s.Queue("tool", map[string]any{
 		"parts": []map[string]any{
 			{
 				"type":      "tool_use",
-				"id":        fmt.Sprintf("call_%s", name),
+				"id":        toolID,
 				"name":      name,
 				"arguments": args,
 			},
@@ -444,6 +450,7 @@ func (s *Server) Wait(n int64) {
 type ReplyBuilder struct {
 	server *Server
 	parts  []map[string]any
+	toolN  int
 }
 
 func (b *ReplyBuilder) Text(text string) *ReplyBuilder {
@@ -452,9 +459,10 @@ func (b *ReplyBuilder) Text(text string) *ReplyBuilder {
 }
 
 func (b *ReplyBuilder) Tool(name string, args map[string]any) *ReplyBuilder {
+	b.toolN++
 	b.parts = append(b.parts, map[string]any{
 		"type":      "tool_use",
-		"id":        fmt.Sprintf("call_%s", name),
+		"id":        fmt.Sprintf("call_%s_%d", name, b.toolN),
 		"name":      name,
 		"arguments": args,
 	})

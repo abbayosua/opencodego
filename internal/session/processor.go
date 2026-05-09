@@ -9,34 +9,24 @@ import (
 
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/message"
+	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
 )
 
-type Result string
-
-const (
-	ResultCompact  Result = "compact"
-	ResultStop     Result = "stop"
-	ResultContinue Result = "continue"
-)
-
-type Handle struct {
-	Events   []llm.Event
-	Messages []message.Message
-}
-
 type Processor struct {
-	tools    *tool.Registry
-	llm      *llm.Client
-	model    string
-	system   string
-	maxTurn  int
+	tools   *tool.Registry
+	llm     *llm.Client
+	store   storage.Store
+	model   string
+	system  string
+	maxTurn int
 }
 
-func NewProcessor(tools *tool.Registry, llmClient *llm.Client, model string, system string) *Processor {
+func NewProcessor(tools *tool.Registry, llmClient *llm.Client, store storage.Store, model string, system string) *Processor {
 	return &Processor{
 		tools:   tools,
 		llm:     llmClient,
+		store:   store,
 		model:   model,
 		system:  system,
 		maxTurn: 25,
@@ -44,13 +34,21 @@ func NewProcessor(tools *tool.Registry, llmClient *llm.Client, model string, sys
 }
 
 type RunResult struct {
+	SessionID  string
 	Messages   []message.Message
 	Events     []llm.Event
 	ToolCalls  int
 	FinalText  string
 }
 
-func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) {
+func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string) (*RunResult, error) {
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("sess_%d", time.Now().UnixNano())
+	}
+	if projectID == "" {
+		projectID = "default"
+	}
+
 	history := []message.Message{
 		message.NewTextMessage(message.RoleUser, prompt),
 	}
@@ -58,6 +56,12 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 	toolDefs := p.loadToolDefs()
 	var allEvents []llm.Event
 	turnCount := 0
+
+	session := p.createSessionRecord(sessionID, projectID, prompt)
+
+	if err := p.saveUserMessage(sessionID, 0, prompt); err != nil {
+		return nil, fmt.Errorf("save user message: %w", err)
+	}
 
 	for turnCount < p.maxTurn {
 		turnCount++
@@ -124,15 +128,8 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 			}
 		}
 
-		// Append assistant message
-		if textBuffer.Len() > 0 {
-			assistantParts = append(assistantParts, message.Content{
-				Type: message.ContentText,
-				Text: textBuffer.String(),
-			})
-		}
+		assistantText := textBuffer.String()
 
-		// Add tool call content parts
 		for _, tc := range toolCallsInTurn {
 			assistantParts = append(assistantParts, message.Content{
 				Type:      message.ContentToolUse,
@@ -150,7 +147,10 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 			history = append(history, assistantMsg)
 		}
 
-		// Execute tool calls and add results
+		if err := p.saveAssistantMessage(sessionID, turnCount, assistantText, toolCallsInTurn); err != nil {
+			return nil, fmt.Errorf("save assistant message: %w", err)
+		}
+
 		for _, tc := range toolCallsInTurn {
 			result := p.executeTool(ctx, tc)
 			toolResultContent := message.Content{
@@ -166,14 +166,15 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 				Content: []message.Content{toolResultContent},
 			}
 			history = append(history, toolResultMsg)
+
+			if err := p.saveToolResult(sessionID, turnCount, tc, result); err != nil {
+				return nil, fmt.Errorf("save tool result: %w", err)
+			}
 		}
 
-		// If no tool calls and step completed, we're done
 		if len(toolCallsInTurn) == 0 && stepComplete {
 			break
 		}
-
-		// Limit check
 		if turnCount >= p.maxTurn {
 			break
 		}
@@ -197,7 +198,16 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 		}
 	}
 
+	session.Title = truncate(prompt, 80)
+	if finalText != "" {
+		session.Summary = truncate(finalText, 200)
+	}
+	if err := p.store.UpdateSession(ctx, session); err != nil {
+		return nil, fmt.Errorf("update session: %w", err)
+	}
+
 	return &RunResult{
+		SessionID: sessionID,
 		Messages:  history,
 		Events:    allEvents,
 		ToolCalls: toolCallCount,
@@ -205,9 +215,112 @@ func (p *Processor) Run(ctx context.Context, prompt string) (*RunResult, error) 
 	}, nil
 }
 
-type toolExecResult struct {
-	output  string
-	isError bool
+func (p *Processor) createSessionRecord(id, projectID, prompt string) *storage.Session {
+	ctx := context.Background()
+	s, err := p.store.CreateSession(ctx, storage.CreateSessionInput{
+		ID:        id,
+		ProjectID: projectID,
+		Title:     truncate(prompt, 80),
+		Model:     p.model,
+		Agent:     "default",
+	})
+	if err != nil {
+		return &storage.Session{
+			ID: id, ProjectID: projectID,
+			Title: truncate(prompt, 80), Model: p.model, Agent: "default",
+		}
+	}
+	return s
+}
+
+func (p *Processor) saveUserMessage(sessionID string, turn int, prompt string) error {
+	msgID := fmt.Sprintf("msg_%s_u%d", sessionID, turn)
+	_, err := p.store.CreateMessage(context.Background(), storage.CreateMessageInput{
+		ID: msgID, SessionID: sessionID,
+		Role:    "user",
+		Content: prompt,
+	})
+	return err
+}
+
+func (p *Processor) saveAssistantMessage(sessionID string, turn int, text string, toolCalls []llm.Event) error {
+	msgID := fmt.Sprintf("msg_%s_a%d", sessionID, turn)
+	content := text
+
+	if len(toolCalls) > 0 {
+		tcNames := make([]string, len(toolCalls))
+		for i, tc := range toolCalls {
+			tcNames[i] = tc.Name
+		}
+		tcJSON, _ := json.Marshal(tcNames)
+		content = text + "\n[TOOL_CALLS: " + string(tcJSON) + "]"
+	}
+
+	_, err := p.store.CreateMessage(context.Background(), storage.CreateMessageInput{
+		ID: msgID, SessionID: sessionID,
+		Role:    "assistant",
+		Content: content,
+	})
+	if err != nil {
+		return err
+	}
+
+	if text != "" {
+		_, err = p.store.CreatePart(context.Background(), storage.CreatePartInput{
+			ID: msgID + "_text", MessageID: msgID,
+			SessionID: sessionID, Type: "text",
+			Content: text,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	for i, tc := range toolCalls {
+		inputStr := string(tc.Input)
+		if inputStr == "" {
+			inputStr = "{}"
+		}
+		partID := fmt.Sprintf("%s_tc_%s_%d", msgID, tc.Name, i)
+		_, err = p.store.CreatePart(context.Background(), storage.CreatePartInput{
+			ID: partID, MessageID: msgID,
+			SessionID: sessionID, Type: "tool_use",
+			Content:  fmt.Sprintf(`{"name":"%s","input":%s}`, tc.Name, inputStr),
+			Metadata: `{"status":"executing"}`,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *Processor) saveToolResult(sessionID string, turn int, tc llm.Event, result toolExecResult) error {
+	msgID := fmt.Sprintf("msg_%s_r%d_%s_%d", sessionID, turn, tc.Name, time.Now().UnixNano())
+	status := "completed"
+	if result.isError {
+		status = "error"
+	}
+	metadata, _ := json.Marshal(map[string]string{"status": status})
+
+	_, err := p.store.CreateMessage(context.Background(), storage.CreateMessageInput{
+		ID: msgID, SessionID: sessionID,
+		Role:    "tool",
+		Content: result.output,
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = p.store.CreatePart(context.Background(), storage.CreatePartInput{
+		ID: msgID + "_part", MessageID: msgID,
+		SessionID: sessionID, Type: "tool_result",
+		Content:  result.output,
+		Metadata: string(metadata),
+	})
+
+	return err
 }
 
 func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResult {
@@ -268,4 +381,16 @@ func (p *Processor) loadToolDefs() []llm.ToolDef {
 		})
 	}
 	return toolDefs
+}
+
+type toolExecResult struct {
+	output  string
+	isError bool
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

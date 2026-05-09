@@ -6,11 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/session"
+	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
 )
 
@@ -126,7 +128,14 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	client.SetAPIKey(cfg.apiKey)
 
 	system := "You are a helpful AI assistant with access to tools. Use them to accomplish tasks accurately."
-	proc := session.NewProcessor(reg, client, cfg.model, system)
+	store, err := storage.NewSQLiteStore(filepath.Join(os.TempDir(), "opencode.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	proc := session.NewProcessor(reg, client, store, cfg.model, system)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -137,7 +146,10 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	fmt.Fprintf(os.Stderr, "\n")
 
 	start := time.Now()
-	result, err := proc.Run(ctx, prompt)
+	wd, _ := os.Getwd()
+	sessionID := fmt.Sprintf("sess_%d", time.Now().UnixNano())
+	projectID := filepath.Base(wd)
+	result, err := proc.Run(ctx, prompt, sessionID, projectID)
 	elapsed := time.Since(start)
 
 	if err != nil {

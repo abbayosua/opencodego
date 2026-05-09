@@ -8,8 +8,19 @@ import (
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/llmtest"
 	"github.com/opencode-go/opencode/internal/session"
+	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
 )
+
+func newTestStore(t *testing.T) storage.Store {
+	t.Helper()
+	s, err := storage.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
 
 func TestProcessorBasicText(t *testing.T) {
 	llmSrv := llmtest.NewForTest(t)
@@ -19,13 +30,14 @@ func TestProcessorBasicText(t *testing.T) {
 	reg.Register(tool.ReadTool())
 	reg.Register(tool.BashTool())
 
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := proc.Run(ctx, "Say hello")
+	result, err := proc.Run(ctx, "Say hello", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +45,14 @@ func TestProcessorBasicText(t *testing.T) {
 	if result.FinalText == "" {
 		t.Error("expected non-empty final text")
 	}
-	if !contains(result.FinalText, "Hello") {
+	if !stringsContains(result.FinalText, "Hello") {
 		t.Errorf("expected final text to contain 'Hello', got: %s", result.FinalText)
 	}
 	if result.ToolCalls != 0 {
 		t.Errorf("expected 0 tool calls, got %d", result.ToolCalls)
+	}
+	if result.SessionID == "" {
+		t.Error("expected non-empty SessionID")
 	}
 }
 
@@ -49,13 +64,14 @@ func TestProcessorToolCall(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(tool.BashTool())
 
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := proc.Run(ctx, "List files")
+	result, err := proc.Run(ctx, "List files", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +113,14 @@ func TestProcessorMultiTurn(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(tool.BashTool())
 
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	result, err := proc.Run(ctx, "Run two commands")
+	result, err := proc.Run(ctx, "Run two commands", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,18 +138,18 @@ func TestProcessorErrorHandling(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(tool.BashTool())
 
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := proc.Run(ctx, "Use unknown tool")
+	result, err := proc.Run(ctx, "Use unknown tool", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The processor should handle unknown tools gracefully
 	if result.ToolCalls != 1 {
 		t.Errorf("expected 1 tool call (unknown), got %d", result.ToolCalls)
 	}
@@ -151,13 +168,14 @@ func TestProcessorWithTools(t *testing.T) {
 	reg.Register(tool.BashTool())
 	reg.Register(tool.GrepTool())
 
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	result, err := proc.Run(ctx, "Read go.mod")
+	result, err := proc.Run(ctx, "Read go.mod", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,20 +190,126 @@ func TestProcessorCancellation(t *testing.T) {
 	llmSrv.Hang()
 
 	reg := tool.NewRegistry()
+	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := proc.Run(ctx, "hang")
+	_, err := proc.Run(ctx, "hang", "", "")
 	if err == nil {
 		t.Error("expected context cancellation error")
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && stringsContains(s, substr)
+func TestProcessorSessionPersistence(t *testing.T) {
+	llmSrv := llmtest.NewForTest(t)
+	llmSrv.Reply().
+		Text("Running a command.").
+		Tool("bash", map[string]any{"command": "echo hello"}).
+		Item()
+	llmSrv.Text("Done!")
+
+	reg := tool.NewRegistry()
+	reg.Register(tool.BashTool())
+
+	store := newTestStore(t)
+	client := llm.NewClient(llmSrv.URL())
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	sessionID := "test-persist-session"
+	result, err := proc.Run(ctx, "Run echo", sessionID, "test-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.SessionID != sessionID {
+		t.Errorf("expected SessionID %q, got %q", sessionID, result.SessionID)
+	}
+
+	// Verify session was stored
+	saved, err := store.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved == nil {
+		t.Fatal("expected session to be saved in store")
+	}
+	if saved.ProjectID != "test-project" {
+		t.Errorf("expected project 'test-project', got %q", saved.ProjectID)
+	}
+	if saved.Title == "" {
+		t.Error("expected non-empty title")
+	}
+
+	// Verify messages were stored
+	msgs, err := store.ListMessages(ctx, storage.ListMessagesFilter{SessionID: sessionID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) < 2 {
+		t.Errorf("expected at least 2 messages (user+assistant), got %d", len(msgs))
+	}
+
+	hasUser := false
+	hasAssistant := false
+	for _, m := range msgs {
+		if m.Role == "user" {
+			hasUser = true
+		}
+		if m.Role == "assistant" || m.Role == "tool" {
+			hasAssistant = true
+		}
+	}
+	if !hasUser {
+		t.Error("expected user message")
+	}
+	if !hasAssistant {
+		t.Error("expected assistant/tool messages")
+	}
+}
+
+func TestProcessorWithExistingStore(t *testing.T) {
+	llmSrv := llmtest.NewForTest(t)
+	llmSrv.Text("Simple response.")
+
+	reg := tool.NewRegistry()
+	store := newTestStore(t)
+
+	// Pre-create a session in the store
+	ctx := context.Background()
+	_, err := store.CreateSession(ctx, storage.CreateSessionInput{
+		ID: "premade-session", ProjectID: "premade",
+		Title: "Pre-made Session", Model: "test-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := llm.NewClient(llmSrv.URL())
+	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	result, err := proc.Run(runCtx, "Test with pre-made session", "premade-session", "premade")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.SessionID != "premade-session" {
+		t.Errorf("expected 'premade-session', got %q", result.SessionID)
+	}
+
+	// Verify update worked (title preserved from pre-made)
+	saved, _ := store.GetSession(ctx, "premade-session")
+	if saved == nil {
+		t.Fatal("expected session to exist")
+	}
 }
 
 func stringsContains(s, substr string) bool {
