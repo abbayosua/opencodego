@@ -1,0 +1,6 @@
+opencode-go.exe
+testargs.json
+opencode-test-output.txt
+.artifacts/
+repo_src/
+internal/tool/tool_test.go.bak

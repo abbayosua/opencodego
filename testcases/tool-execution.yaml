@@ -1,0 +1,46 @@
+# Test cases for opencode-go dual-run verification
+#
+# Each test case defines tools to execute and expected results.
+# The test harness runs each tool via the Go binary and verifies output.
+
+- id: list-go-files
+  prompt: "list all .go files"
+  tools:
+    - tool: glob
+      args:
+        pattern: "*.go"
+        path: "."
+  expected:
+    tool_calls: 1
+
+- id: grep-with-include
+  prompt: "find all tool definitions"
+  tools:
+    - tool: grep
+      args:
+        pattern: "func.*Tool"
+        include: "*.go"
+        path: "."
+  expected:
+    tool_calls: 1
+
+- id: bash-echo
+  prompt: "run echo hello"
+  tools:
+    - tool: bash
+      args:
+        command: "echo hello world"
+  expected:
+    tool_calls: 1
+    output_contains: ["hello world"]
+
+- id: write-and-read
+  prompt: "write a file then read it"
+  tools:
+    - tool: write
+      args:
+        file_path: "opencode-test-output.txt"
+        content: "test content 123"
+  expected:
+    tool_calls: 1
+    output_contains: ["Successfully"]
