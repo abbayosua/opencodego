@@ -2,9 +2,11 @@ package session_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/llmtest"
 	"github.com/opencode-go/opencode/internal/session"
@@ -32,7 +34,7 @@ func TestProcessorBasicText(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -66,7 +68,7 @@ func TestProcessorToolCall(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -115,7 +117,7 @@ func TestProcessorMultiTurn(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -140,7 +142,7 @@ func TestProcessorErrorHandling(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -170,7 +172,7 @@ func TestProcessorWithTools(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -192,7 +194,7 @@ func TestProcessorCancellation(t *testing.T) {
 	reg := tool.NewRegistry()
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -216,7 +218,7 @@ func TestProcessorSessionPersistence(t *testing.T) {
 
 	store := newTestStore(t)
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -291,7 +293,7 @@ func TestProcessorWithExistingStore(t *testing.T) {
 	}
 
 	client := llm.NewClient(llmSrv.URL())
-	proc := session.NewProcessor(reg, client, store, "test-model", "You are a helpful assistant.")
+	proc := session.NewProcessor(reg, client, store, bus.New(), "test-model", "You are a helpful assistant.")
 
 	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -309,6 +311,77 @@ func TestProcessorWithExistingStore(t *testing.T) {
 	saved, _ := store.GetSession(ctx, "premade-session")
 	if saved == nil {
 		t.Fatal("expected session to exist")
+	}
+}
+
+func TestProcessorPublishesEvents(t *testing.T) {
+	llmSrv := llmtest.NewForTest(t)
+	llmSrv.Reply().
+		Text("Running tool.").
+		Tool("bash", map[string]any{"command": "echo hello"}).
+		Item()
+	llmSrv.Text("Done!")
+
+	reg := tool.NewRegistry()
+	reg.Register(tool.BashTool())
+
+	eventBus := bus.New()
+	var sessionEvents, msgEvents, toolEvents, llmEvents, agentEvents int32
+
+	eventBus.Subscribe(bus.TypeSessionCreated, func(e bus.Event) {
+		atomic.AddInt32(&sessionEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeSessionUpdated, func(e bus.Event) {
+		atomic.AddInt32(&sessionEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeMessageSent, func(e bus.Event) {
+		atomic.AddInt32(&msgEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
+		atomic.AddInt32(&toolEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
+		atomic.AddInt32(&toolEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
+		atomic.AddInt32(&llmEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeLLMCompleted, func(e bus.Event) {
+		atomic.AddInt32(&llmEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeAgentStarted, func(e bus.Event) {
+		atomic.AddInt32(&agentEvents, 1)
+	})
+	eventBus.Subscribe(bus.TypeAgentCompleted, func(e bus.Event) {
+		atomic.AddInt32(&agentEvents, 1)
+	})
+
+	store := newTestStore(t)
+	client := llm.NewClient(llmSrv.URL())
+	proc := session.NewProcessor(reg, client, store, eventBus, "test-model", "You are a helpful assistant.")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, err := proc.Run(ctx, "Test events", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := atomic.LoadInt32(&sessionEvents); n < 2 {
+		t.Errorf("expected >=2 session events (created+updated), got %d", n)
+	}
+	if n := atomic.LoadInt32(&msgEvents); n < 2 {
+		t.Errorf("expected >=2 message events (user+assistant), got %d", n)
+	}
+	if n := atomic.LoadInt32(&toolEvents); n != 2 {
+		t.Errorf("expected 2 tool events (called+completed), got %d", n)
+	}
+	if n := atomic.LoadInt32(&llmEvents); n < 1 {
+		t.Errorf("expected >=1 LLM event, got %d", n)
+	}
+	if n := atomic.LoadInt32(&agentEvents); n != 2 {
+		t.Errorf("expected 2 agent events (started+completed), got %d", n)
 	}
 }
 

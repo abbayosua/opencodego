@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
@@ -138,7 +139,7 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	}
 	defer store.Close()
 
-	proc := session.NewProcessor(reg, client, store, cfg.model, system)
+	proc := session.NewProcessor(reg, client, store, bus.New(), cfg.model, system)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/message"
 	"github.com/opencode-go/opencode/internal/storage"
@@ -17,16 +18,18 @@ type Processor struct {
 	tools   *tool.Registry
 	llm     *llm.Client
 	store   storage.Store
+	bus     *bus.Bus
 	model   string
 	system  string
 	maxTurn int
 }
 
-func NewProcessor(tools *tool.Registry, llmClient *llm.Client, store storage.Store, model string, system string) *Processor {
+func NewProcessor(tools *tool.Registry, llmClient *llm.Client, store storage.Store, eventBus *bus.Bus, model string, system string) *Processor {
 	return &Processor{
 		tools:   tools,
 		llm:     llmClient,
 		store:   store,
+		bus:     eventBus,
 		model:   model,
 		system:  system,
 		maxTurn: 25,
@@ -54,14 +57,17 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 	}
 
 	toolDefs := p.loadToolDefs()
-	var allEvents []llm.Event
+	var allLLMEvents []llm.Event
 	turnCount := 0
 
 	session := p.createSessionRecord(sessionID, projectID, prompt)
+	p.publishAgentStarted("default", sessionID)
+	p.publishSessionCreated(sessionID, session.Title, session.Model, "default")
 
 	if err := p.saveUserMessage(sessionID, 0, prompt); err != nil {
 		return nil, fmt.Errorf("save user message: %w", err)
 	}
+	p.publishMessageSent(sessionID, "user", prompt)
 
 	for turnCount < p.maxTurn {
 		turnCount++
@@ -77,6 +83,9 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 			req.Tools = toolDefs
 		}
 
+		llmStartTime := time.Now()
+		p.publishLLMStarted(p.model, prompt)
+
 		events, errs := p.llm.Stream(ctx, req)
 
 		var assistantParts []message.Content
@@ -91,7 +100,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 				if !ok {
 					break loop
 				}
-				allEvents = append(allEvents, evt)
+				allLLMEvents = append(allLLMEvents, evt)
 
 				switch evt.Type {
 				case llm.EventTextDelta:
@@ -119,6 +128,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 
 			case err, ok := <-errs:
 				if ok && err != nil {
+					p.publishLLMError(p.model, err.Error())
 					return nil, fmt.Errorf("llm stream error: %w", err)
 				}
 				break loop
@@ -129,6 +139,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		}
 
 		assistantText := textBuffer.String()
+		p.publishLLMCompleted(p.model, assistantText, 0, 0, time.Since(llmStartTime).Milliseconds())
 
 		for _, tc := range toolCallsInTurn {
 			assistantParts = append(assistantParts, message.Content{
@@ -150,9 +161,22 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		if err := p.saveAssistantMessage(sessionID, turnCount, assistantText, toolCallsInTurn); err != nil {
 			return nil, fmt.Errorf("save assistant message: %w", err)
 		}
+		p.publishMessageSent(sessionID, "assistant", assistantText)
 
 		for _, tc := range toolCallsInTurn {
+			inputStr := string(tc.Input)
+			p.publishToolCalled(sessionID, tc.Name, inputStr)
+
+			toolStart := time.Now()
 			result := p.executeTool(ctx, tc)
+			durationMs := time.Since(toolStart).Milliseconds()
+
+			if result.isError {
+				p.publishToolFailed(sessionID, tc.Name, result.output, durationMs)
+			} else {
+				p.publishToolCompleted(sessionID, tc.Name, result.output, durationMs)
+			}
+
 			toolResultContent := message.Content{
 				Type:       message.ContentToolResult,
 				ToolUseID:  tc.ToolCallID,
@@ -192,7 +216,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 	}
 
 	toolCallCount := 0
-	for _, e := range allEvents {
+	for _, e := range allLLMEvents {
 		if e.Type == llm.EventToolCall {
 			toolCallCount++
 		}
@@ -205,14 +229,97 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 	if err := p.store.UpdateSession(ctx, session); err != nil {
 		return nil, fmt.Errorf("update session: %w", err)
 	}
+	p.publishSessionUpdated(sessionID, session.Title)
+
+	p.publishAgentCompleted("default", sessionID)
 
 	return &RunResult{
 		SessionID: sessionID,
 		Messages:  history,
-		Events:    allEvents,
+		Events:    allLLMEvents,
 		ToolCalls: toolCallCount,
 		FinalText: finalText,
 	}, nil
+}
+
+func (p *Processor) publishSessionCreated(id, title, model, agent string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewSessionCreated(id, title, model, agent))
+}
+
+func (p *Processor) publishSessionUpdated(id, title string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewSessionUpdated(id, title))
+}
+
+func (p *Processor) publishMessageSent(sessionID, role, content string) {
+	if p.bus == nil {
+		return
+	}
+	if len(content) > 200 {
+		content = content[:200]
+	}
+	p.bus.Publish(bus.NewMessageSent(sessionID, role, content))
+}
+
+func (p *Processor) publishToolCalled(sessionID, toolName, input string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewToolCalled(sessionID, toolName, input))
+}
+
+func (p *Processor) publishToolCompleted(sessionID, toolName, output string, durationMs int64) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewToolCompleted(sessionID, toolName, output, durationMs))
+}
+
+func (p *Processor) publishToolFailed(sessionID, toolName, err string, durationMs int64) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewToolFailed(sessionID, toolName, err, durationMs))
+}
+
+func (p *Processor) publishLLMStarted(model, prompt string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewLLMStarted(model, prompt))
+}
+
+func (p *Processor) publishLLMCompleted(model, response string, tokensIn, tokensOut int, durationMs int64) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewLLMCompleted(model, response, tokensIn, tokensOut, durationMs))
+}
+
+func (p *Processor) publishLLMError(model, err string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewLLMError(model, err))
+}
+
+func (p *Processor) publishAgentStarted(agentName, sessionID string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewAgentStarted(agentName, sessionID))
+}
+
+func (p *Processor) publishAgentCompleted(agentName, sessionID string) {
+	if p.bus == nil {
+		return
+	}
+	p.bus.Publish(bus.NewAgentCompleted(agentName, sessionID))
 }
 
 func (p *Processor) createSessionRecord(id, projectID, prompt string) *storage.Session {
