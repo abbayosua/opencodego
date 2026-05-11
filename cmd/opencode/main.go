@@ -49,6 +49,9 @@ func main() {
 			}
 		}
 
+	case "session":
+		sessionCmd(os.Args[2:])
+
 	case "execute":
 		if len(os.Args) < 4 {
 			fmt.Fprintf(os.Stderr, "Usage: opencode execute <tool> <json-args>\n")
