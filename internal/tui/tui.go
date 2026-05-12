@@ -25,7 +25,7 @@ func defaultModelName() string {
 	if m != "" {
 		return m
 	}
-	return "gpt-4o"
+	return "big-pickle"
 }
 
 func defaultAPIURL() string {
@@ -33,7 +33,7 @@ func defaultAPIURL() string {
 	if u != "" {
 		return u
 	}
-	return "https://api.openai.com/v1"
+	return "https://opencode.ai/zen/v1"
 }
 
 func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {

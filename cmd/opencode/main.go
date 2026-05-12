@@ -101,8 +101,8 @@ type runConfig struct {
 
 func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	cfg := runConfig{
-		model:   envOr("OPENCODE_MODEL", "gpt-4o"),
-		apiURL:  envOr("OPENCODE_API_URL", "https://api.openai.com/v1"),
+		model:   envOr("OPENCODE_MODEL", "big-pickle"),
+		apiURL:  envOr("OPENCODE_API_URL", "https://opencode.ai/zen/v1"),
 		apiKey:  os.Getenv("OPENCODE_API_KEY"),
 		maxTurn: 25,
 	}
@@ -188,8 +188,8 @@ func tuiCmd() {
 	reg.Register(tool.GrepTool())
 	reg.Register(tool.GlobTool())
 
-	model := envOr("OPENCODE_MODEL", "gpt-4o")
-	apiURL := envOr("OPENCODE_API_URL", "https://api.openai.com/v1")
+	model := envOr("OPENCODE_MODEL", "big-pickle")
+	apiURL := envOr("OPENCODE_API_URL", "https://opencode.ai/zen/v1")
 	apiKey := os.Getenv("OPENCODE_API_KEY")
 
 	if err := tui.Run(reg, model, apiURL, apiKey); err != nil {
