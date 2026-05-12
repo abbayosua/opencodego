@@ -15,6 +15,7 @@ import (
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
+	"github.com/opencode-go/opencode/internal/tui"
 )
 
 func main() {
@@ -49,6 +50,9 @@ func main() {
 				fmt.Printf("- %s: %s\n", def.ID, def.Description)
 			}
 		}
+
+	case "tui":
+		tuiCmd()
 
 	case "session":
 		sessionCmd(os.Args[2:])
@@ -174,6 +178,30 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	}
 
 	fmt.Fprintf(os.Stderr, "✅ Done in %v\n", elapsed.Round(time.Millisecond))
+}
+
+func tuiCmd() {
+	reg := tool.NewRegistry()
+	reg.Register(tool.ReadTool())
+	reg.Register(tool.WriteTool())
+	reg.Register(tool.EditTool())
+	reg.Register(tool.BashTool())
+	reg.Register(tool.GrepTool())
+	reg.Register(tool.GlobTool())
+
+	model := envOr("OPENCODE_MODEL", "gpt-4o")
+	apiURL := envOr("OPENCODE_API_URL", "https://api.openai.com/v1")
+	apiKey := os.Getenv("OPENCODE_API_KEY")
+
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "Error: OPENCODE_API_KEY not set\n")
+		os.Exit(1)
+	}
+
+	if err := tui.Run(reg, model, apiURL, apiKey); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func decodeArg(raw string) (map[string]any, error) {
