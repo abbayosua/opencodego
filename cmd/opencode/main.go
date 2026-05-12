@@ -31,6 +31,8 @@ func main() {
 	reg.Register(tool.BashTool())
 	reg.Register(tool.GrepTool())
 	reg.Register(tool.GlobTool())
+	reg.Register(tool.TaskTool())
+	reg.Register(tool.TaskTool())
 
 	ctx := context.Background()
 	toolCtx := tool.Context{Context: ctx}
@@ -143,6 +145,7 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	defer store.Close()
 
 	proc := session.NewProcessor(reg, client, store, bus.New(), cfg.model, system)
+	proc.EnableSubAgents()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -187,6 +190,7 @@ func tuiCmd() {
 	reg.Register(tool.BashTool())
 	reg.Register(tool.GrepTool())
 	reg.Register(tool.GlobTool())
+	reg.Register(tool.TaskTool())
 
 	model := envOr("OPENCODE_MODEL", "big-pickle")
 	apiURL := envOr("OPENCODE_API_URL", "https://opencode.ai/zen/v1")

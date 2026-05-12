@@ -51,6 +51,7 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 
 	system := "You are a helpful AI assistant with access to tools."
 	proc := session.NewProcessor(reg, client, store, eventBus, modelName, system)
+	proc.EnableSubAgents()
 
 	initModel := initialModel()
 	initModel.proc = proc
@@ -258,6 +259,7 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 		defer store.Close()
 
 		proc := session.NewProcessor(m.proc.ExportToolRegistry(), client, store, eventBus, m.currentModel, system)
+		proc.EnableSubAgents()
 
 		result, procErr := proc.Run(ctx, prompt, m.sessionID, "tui")
 		if procErr != nil {

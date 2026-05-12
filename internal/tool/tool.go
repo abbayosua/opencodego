@@ -14,6 +14,7 @@ type Context struct {
 	MessageID string
 	CallID    string
 	Agent     string
+	Extra     map[string]any
 }
 
 type Def struct {

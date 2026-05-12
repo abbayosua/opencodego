@@ -25,7 +25,7 @@ type Processor struct {
 }
 
 func NewProcessor(tools *tool.Registry, llmClient *llm.Client, store storage.Store, eventBus *bus.Bus, model string, system string) *Processor {
-	return &Processor{
+	p := &Processor{
 		tools:   tools,
 		llm:     llmClient,
 		store:   store,
@@ -34,6 +34,7 @@ func NewProcessor(tools *tool.Registry, llmClient *llm.Client, store storage.Sto
 		system:  system,
 		maxTurn: 25,
 	}
+	return p
 }
 
 type RunResult struct {
@@ -471,6 +472,29 @@ func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResu
 		output:  result.Output,
 		isError: false,
 	}
+}
+
+func (p *Processor) EnableSubAgents() {
+	tool.SubAgentRunner = p.runSubAgent
+}
+
+func (p *Processor) runSubAgent(subagentType, prompt, parentSessionID string) (string, error) {
+	subSessionID := fmt.Sprintf("sub_%s_%d", subagentType, time.Now().UnixNano())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	system := fmt.Sprintf("You are a %s sub-agent. Focus on your assigned task and report results.", subagentType)
+
+	subProc := NewProcessor(p.tools, p.llm, p.store, p.bus, p.model, system)
+	subProc.maxTurn = 10
+
+	result, err := subProc.Run(ctx, prompt, subSessionID, parentSessionID)
+	if err != nil {
+		return "", fmt.Errorf("sub-agent %s: %w", subagentType, err)
+	}
+
+	return result.FinalText, nil
 }
 
 func (p *Processor) ExportToolRegistry() *tool.Registry {
