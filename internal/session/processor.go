@@ -473,6 +473,10 @@ func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResu
 	}
 }
 
+func (p *Processor) ExportToolRegistry() *tool.Registry {
+	return p.tools
+}
+
 func (p *Processor) loadToolDefs() []llm.ToolDef {
 	defs, err := p.tools.All()
 	if err != nil {

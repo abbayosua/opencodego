@@ -29,7 +29,11 @@ func render(m *tuiModel) string {
 
 	var b strings.Builder
 
-	h := headerStyle.Width(m.width - 2).Render(" OpenCode-Go ")
+	headerText := " OpenCode-Go "
+	if m.currentModel != "" {
+		headerText = fmt.Sprintf(" OpenCode-Go | Model: %s ", m.currentModel)
+	}
+	h := headerStyle.Width(m.width - 2).Render(headerText)
 	b.WriteString(h)
 	b.WriteString("\n")
 

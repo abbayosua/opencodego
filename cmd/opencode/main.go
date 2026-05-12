@@ -128,8 +128,7 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	}
 
 	if cfg.apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Error: OPENCODE_API_KEY not set and --api-key not provided\n")
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Warning: OPENCODE_API_KEY not set. Running without LLM authentication.\n")
 	}
 
 	client := llm.NewClient(cfg.apiURL)
@@ -192,11 +191,6 @@ func tuiCmd() {
 	model := envOr("OPENCODE_MODEL", "gpt-4o")
 	apiURL := envOr("OPENCODE_API_URL", "https://api.openai.com/v1")
 	apiKey := os.Getenv("OPENCODE_API_KEY")
-
-	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Error: OPENCODE_API_KEY not set\n")
-		os.Exit(1)
-	}
 
 	if err := tui.Run(reg, model, apiURL, apiKey); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
