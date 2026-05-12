@@ -36,6 +36,14 @@ func defaultAPIURL() string {
 	return "https://opencode.ai/zen/v1"
 }
 
+func defaultAPIKey() string {
+	k := os.Getenv("OPENCODE_API_KEY")
+	if k != "" {
+		return k
+	}
+	return "public"
+}
+
 func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	store, err := storage.NewSQLiteStore(fmt.Sprintf("%s%copencode-tui.db", os.TempDir(), os.PathSeparator))
 	if err != nil {
@@ -242,13 +250,16 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 
 func (m *tuiModel) runSession(prompt string) tea.Cmd {
 	return func() tea.Msg {
+		sessionID := fmt.Sprintf("tui_%d_%d", time.Now().UnixNano(), time.Now().UnixMilli())
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
 		client := llm.NewClient(m.apiURL)
-		if m.hasAPIKey {
-			client.SetAPIKey(os.Getenv("OPENCODE_API_KEY"))
+		apiKey := os.Getenv("OPENCODE_API_KEY")
+		if apiKey == "" {
+			apiKey = "public"
 		}
+		client.SetAPIKey(apiKey)
 
 		system := "You are a helpful AI assistant with access to tools."
 		eventBus := bus.New()
@@ -261,7 +272,7 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 		proc := session.NewProcessor(m.proc.ExportToolRegistry(), client, store, eventBus, m.currentModel, system)
 		proc.EnableSubAgents()
 
-		result, procErr := proc.Run(ctx, prompt, m.sessionID, "tui")
+		result, procErr := proc.Run(ctx, prompt, sessionID, "tui")
 		if procErr != nil {
 			return runResultMsg{err: procErr.Error()}
 		}

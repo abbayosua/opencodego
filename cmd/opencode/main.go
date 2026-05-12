@@ -105,7 +105,7 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	cfg := runConfig{
 		model:   envOr("OPENCODE_MODEL", "big-pickle"),
 		apiURL:  envOr("OPENCODE_API_URL", "https://opencode.ai/zen/v1"),
-		apiKey:  os.Getenv("OPENCODE_API_KEY"),
+		apiKey:  envOr("OPENCODE_API_KEY", "public"),
 		maxTurn: 25,
 	}
 
@@ -195,6 +195,9 @@ func tuiCmd() {
 	model := envOr("OPENCODE_MODEL", "big-pickle")
 	apiURL := envOr("OPENCODE_API_URL", "https://opencode.ai/zen/v1")
 	apiKey := os.Getenv("OPENCODE_API_KEY")
+	if apiKey == "" {
+		apiKey = "public"
+	}
 
 	if err := tui.Run(reg, model, apiURL, apiKey); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)

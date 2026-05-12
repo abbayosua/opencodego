@@ -342,7 +342,7 @@ func (p *Processor) createSessionRecord(id, projectID, prompt string) *storage.S
 }
 
 func (p *Processor) saveUserMessage(sessionID string, turn int, prompt string) error {
-	msgID := fmt.Sprintf("msg_%s_u%d", sessionID, turn)
+	msgID := fmt.Sprintf("msg_%s_u%d_%d", sessionID, turn, time.Now().UnixNano())
 	_, err := p.store.CreateMessage(context.Background(), storage.CreateMessageInput{
 		ID: msgID, SessionID: sessionID,
 		Role:    "user",
@@ -352,7 +352,7 @@ func (p *Processor) saveUserMessage(sessionID string, turn int, prompt string) e
 }
 
 func (p *Processor) saveAssistantMessage(sessionID string, turn int, text string, toolCalls []llm.Event) error {
-	msgID := fmt.Sprintf("msg_%s_a%d", sessionID, turn)
+	msgID := fmt.Sprintf("msg_%s_a%d_%d", sessionID, turn, time.Now().UnixNano())
 	content := text
 
 	if len(toolCalls) > 0 {

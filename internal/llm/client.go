@@ -90,6 +90,18 @@ type Client struct {
 	client  *http.Client
 }
 
+func (c *Client) setRequestHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	// Zen API requires these headers
+	if strings.Contains(c.baseURL, "opencode.ai") {
+		req.Header.Set("HTTP-Referer", "https://opencode.ai/")
+		req.Header.Set("X-Title", "opencode")
+	}
+}
+
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -116,15 +128,12 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan Event, <
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(bodyJSON))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
 		if err != nil {
 			errs <- fmt.Errorf("create request: %w", err)
 			return
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		if c.apiKey != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-		}
+		c.setRequestHeaders(httpReq)
 
 		resp, err := c.client.Do(httpReq)
 		if err != nil {
