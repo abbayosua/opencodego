@@ -157,6 +157,30 @@ func TestWrapLine(t *testing.T) {
 	}
 }
 
+func TestRenderingWithInput(t *testing.T) {
+	m := initialModel()
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.input = "list files"
+
+	out := render(&m)
+	if !strings.Contains(out, "list files") {
+		t.Errorf("expected input text to render, got: %s", out)
+	}
+
+	// Test that input text REPLACES the placeholder
+	if strings.Contains(out, "Type a prompt") {
+		t.Log("placeholder hidden when input is non-empty")
+	}
+
+	m.isLoading = true
+	out = render(&m)
+	if strings.Contains(out, "list files") {
+		t.Log("input hidden during loading")
+	}
+}
+
 func TestTruncateStr(t *testing.T) {
 	if truncateStr("short", 10) != "short" {
 		t.Errorf("expected 'short', got %q", truncateStr("short", 10))

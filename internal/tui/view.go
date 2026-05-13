@@ -74,11 +74,13 @@ func render(m *tuiModel) string {
 		lines++
 	}
 
-	inputBorder := "Type a prompt and press Enter (Ctrl+C to quit)"
+	inputText := m.input
 	if m.isLoading {
-		inputBorder = "Waiting for response..."
+		inputText = "Waiting for response..."
+	} else if inputText == "" {
+		inputText = "Type a prompt and press Enter (Ctrl+C to quit)"
 	}
-	inp := inputStyle.Width(m.width - 4).Render(inputBorder)
+	inp := inputStyle.Width(m.width - 4).Render(inputText)
 	b.WriteString(inp)
 	b.WriteString("\n")
 

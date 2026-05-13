@@ -174,8 +174,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		default:
-			if !m.isLoading {
-				m.input += msg.String()
+			if !m.isLoading && len(msg.Runes) > 0 {
+				m.input += string(msg.Runes)
 			}
 		}
 
