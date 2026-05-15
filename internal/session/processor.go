@@ -92,6 +92,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		var assistantParts []message.Content
 		var toolCallsInTurn []llm.Event
 		var textBuffer strings.Builder
+		var reasoningBuffer strings.Builder
 		stepComplete := false
 
 	loop:
@@ -113,6 +114,18 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 							Type: message.ContentText,
 							Text: textBuffer.String(),
 						})
+					}
+
+				case llm.EventReasoningDelta:
+					reasoningBuffer.WriteString(evt.Text)
+
+				case llm.EventReasoningEnd:
+					if reasoningBuffer.Len() > 0 {
+						assistantParts = append(assistantParts, message.Content{
+							Type:      message.ContentReasoning,
+							Reasoning: reasoningBuffer.String(),
+						})
+						reasoningBuffer.Reset()
 					}
 
 				case llm.EventToolCall:

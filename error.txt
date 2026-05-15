@@ -1,0 +1,44 @@
+   Welcome to OpenCode-Go! Type a prompt and press Enter.
+ You:
+  hello
+ Assistant:
+  Hello! How can I help you today? If you need assistance with any tasks or have q
+  uestions, feel free to ask.
+ You:
+  what are you doing right now
+ Assistant:
+  I'm here in a ready state, waiting for you to give me a task or ask a question!
+  I have access to various tools like reading/writing files, running bash commands
+  , searching code, and even launching sub-agents for complex subtasks.
+
+  Right now, I'm not doing anything specific—just chatting with you. How can I h
+  elp you today?
+ You:
+  can you create a index.html like an apple website, using loremflickr for the ima
+  ge and emoji for the icons
+ Error:
+  llm stream error: API error 400: {"error":{"message":"Error from provider (DeepS
+  eek): The `reasoning_content` in the thinking mode must be passed back to the AP
+  I.","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Type a prompt and press Enter (Ctrl+C to quit)                                                                                                                     │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ 

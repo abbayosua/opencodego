@@ -62,10 +62,11 @@ type StreamRequest struct {
 }
 
 type openAIChatMessage struct {
-	Role    string             `json:"role"`
-	Content []openAIChatPart   `json:"content,omitempty"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Role             string             `json:"role"`
+	Content          []openAIChatPart   `json:"content,omitempty"`
+	ToolCalls        []openAIToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID       string             `json:"tool_call_id,omitempty"`
+	ReasoningContent *string            `json:"reasoning_content,omitempty"`
 }
 
 type openAIChatPart struct {
@@ -295,6 +296,7 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 
 		case message.RoleAssistant:
 			var toolCalls []openAIToolCall
+			var reasoningParts []string
 			for _, c := range m.Content {
 				if c.Type == message.ContentToolUse {
 					args, _ := json.Marshal(c.ToolInput)
@@ -307,6 +309,9 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 						},
 					})
 				}
+				if c.Reasoning != "" {
+					reasoningParts = append(reasoningParts, c.Reasoning)
+				}
 			}
 			msg := openAIChatMessage{Role: "assistant"}
 			if len(toolCalls) > 0 {
@@ -314,12 +319,16 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 			}
 			textContent := []openAIChatPart{}
 			for _, c := range m.Content {
-				if c.Text != "" {
+				if c.Type == message.ContentText && c.Text != "" {
 					textContent = append(textContent, openAIChatPart{Type: "text", Text: c.Text})
 				}
 			}
 			if len(textContent) > 0 {
 				msg.Content = textContent
+			}
+			if len(reasoningParts) > 0 {
+				reasoningText := strings.Join(reasoningParts, "")
+				msg.ReasoningContent = &reasoningText
 			}
 			msgs = append(msgs, msg)
 
@@ -330,6 +339,17 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 					ToolCallID: c.ToolUseID,
 					Content:    []openAIChatPart{{Type: "text", Text: c.ToolOutput}},
 				})
+			}
+		}
+	}
+
+	// DeepSeek requires reasoning_content on ALL assistant messages, even if empty
+	modelLower := strings.ToLower(req.Model)
+	if strings.Contains(modelLower, "deepseek") {
+		for i := range msgs {
+			if msgs[i].Role == "assistant" && msgs[i].ReasoningContent == nil {
+				empty := ""
+				msgs[i].ReasoningContent = &empty
 			}
 		}
 	}
