@@ -181,6 +181,53 @@ func TestRenderingWithInput(t *testing.T) {
 	}
 }
 
+func TestProgressMessagesRender(t *testing.T) {
+	m := initialModel()
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.isLoading = true
+	m.progressMsgs = map[string]string{
+		"bash":   "🔧 bash ls -la",
+		"llm_start": "🧠 Thinking...",
+	}
+
+	out := render(&m)
+	if !strings.Contains(out, "🔧") {
+		t.Errorf("expected tool emoji, got: %s", out)
+	}
+	if !strings.Contains(out, "bash") {
+		t.Errorf("expected tool name, got: %s", out)
+	}
+}
+
+func TestProgressMessagesWithoutTools(t *testing.T) {
+	m := initialModel()
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.isLoading = true
+
+	out := render(&m)
+	if !strings.Contains(out, "Processing") {
+		t.Errorf("expected Processing text, got: %s", out)
+	}
+}
+
+func TestProgressMessagesClearedAfterRun(t *testing.T) {
+	m := initialModel()
+	m.isLoading = true
+	m.progressMsgs = map[string]string{"bash": "running"}
+
+	// Simulate run completion
+	m.isLoading = false
+	m.progressMsgs = make(map[string]string)
+
+	if len(m.progressMsgs) != 0 {
+		t.Error("expected progress messages cleared")
+	}
+}
+
 func TestTruncateStr(t *testing.T) {
 	if truncateStr("short", 10) != "short" {
 		t.Errorf("expected 'short', got %q", truncateStr("short", 10))

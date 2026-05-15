@@ -20,6 +20,18 @@ type chatMessage struct {
 	Content string
 }
 
+type progressMsg struct {
+	role    string
+	content string
+	id      string
+}
+
+type runResultMsg struct {
+	text      string
+	err       string
+	toolCalls int
+}
+
 func defaultModelName() string {
 	m := os.Getenv("OPENCODE_MODEL")
 	if m != "" {
@@ -44,6 +56,39 @@ func defaultAPIKey() string {
 	return "public"
 }
 
+type tuiModel struct {
+	proc        *session.Processor
+	store       storage.Store
+	eventBus    *bus.Bus
+	program     *tea.Program
+
+	ready        bool
+	width        int
+	height       int
+	messages     []chatMessage
+	input        string
+	isLoading    bool
+	prompt       string
+	status       string
+	lastError    string
+	currentModel string
+	apiURL       string
+	hasAPIKey    bool
+
+	progressMsgs map[string]string
+	subIDs       []int
+}
+
+func initialModel() tuiModel {
+	return tuiModel{
+		messages: []chatMessage{
+			{Role: "system", Content: "Welcome to OpenCode-Go! Type a prompt and press Enter to start."},
+		},
+		status:       "Ready",
+		progressMsgs: make(map[string]string),
+	}
+}
+
 func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	store, err := storage.NewSQLiteStore(fmt.Sprintf("%s%copencode-tui.db", os.TempDir(), os.PathSeparator))
 	if err != nil {
@@ -64,6 +109,7 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	initModel := initialModel()
 	initModel.proc = proc
 	initModel.store = store
+	initModel.eventBus = eventBus
 	initModel.currentModel = modelName
 	initModel.apiURL = apiURL
 	initModel.hasAPIKey = apiKey != ""
@@ -73,6 +119,7 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 		&initModel,
 		tea.WithAltScreen(),
 	)
+	initModel.program = p
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("tui error: %w", err)
@@ -81,55 +128,64 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	return nil
 }
 
-type tuiModel struct {
-	proc    *session.Processor
-	store   storage.Store
-
-	ready        bool
-	width        int
-	height       int
-	messages     []chatMessage
-	input        string
-	isLoading    bool
-	prompt       string
-	status       string
-	lastError    string
-	sessionID    string
-	currentModel string
-	apiURL       string
-	hasAPIKey    bool
-}
-
-type runResultMsg struct {
-	text      string
-	err       string
-	toolCalls int
-}
-
-func initialModel() tuiModel {
-	return tuiModel{
-		messages: []chatMessage{
-			{Role: "system", Content: "Welcome to OpenCode-Go! Type a prompt and press Enter to start."},
-		},
-		status: "Ready",
-	}
-}
-
 func (m *tuiModel) Init() tea.Cmd {
 	m.ready = true
-	m.sessionID = fmt.Sprintf("tui_%d", time.Now().UnixNano())
 
 	welcomeMsg := "Welcome to OpenCode-Go! Type a prompt and press Enter."
 	if !m.hasAPIKey {
-		welcomeMsg += "\n\nNo API key configured. Set OPENCODE_API_KEY to use a real LLM. " +
-			"Type /model <name> to change model or /apiurl <url> to change API endpoint."
+		welcomeMsg += "\n\nFree model (big-pickle) via Zen API. "
+		welcomeMsg += "Set OPENCODE_API_KEY to connect other providers. "
+		welcomeMsg += "Type /help for commands."
 	}
 
 	m.messages = []chatMessage{
 		{Role: "system", Content: welcomeMsg},
 	}
 
+	// Subscribe to event bus for live progress
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		content := fmt.Sprintf("🔧 %s %s", tc.ToolName, truncateStr(tc.Input, 60))
+		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName})
+	}))
+
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		content := fmt.Sprintf("✅ %s completed (%dms)", tc.ToolName, tc.DurationMs)
+		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName + "_done"})
+	}))
+
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolFailed, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		content := fmt.Sprintf("❌ %s failed: %s (%dms)", tc.ToolName, truncateStr(tc.Error, 80), tc.DurationMs)
+		m.program.Send(progressMsg{role: "error", content: content, id: tc.ToolName + "_fail"})
+	}))
+
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
+		m.program.Send(progressMsg{role: "system", content: "🧠 Thinking...", id: "llm_start"})
+	}))
+
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMCompleted, func(e bus.Event) {
+		le := e.(bus.LLMEvent)
+		content := fmt.Sprintf("📝 Response received (%dms)", le.DurationMs)
+		m.program.Send(progressMsg{role: "system", content: content, id: "llm_done"})
+	}))
+
+	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeMessageSent, func(e bus.Event) {
+		me := e.(bus.MessageEvent)
+		if me.Role == "assistant" && me.Content != "" {
+			m.program.Send(progressMsg{role: "assistant", content: me.Content, id: "msg_" + me.SessionID})
+		}
+	}))
+
 	return nil
+}
+
+func (m *tuiModel) cleanupSubs() {
+	for _, id := range m.subIDs {
+		m.eventBus.UnsubscribeAll(id)
+	}
+	m.subIDs = nil
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -142,6 +198,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
+			m.cleanupSubs()
 			return m, tea.Quit
 
 		case "enter":
@@ -179,8 +236,22 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case progressMsg:
+		if msg.id == "llm_start" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: "🧠 Thinking..."})
+		} else if msg.id == "llm_done" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: msg.content})
+		} else if strings.HasPrefix(msg.role, "tool") || msg.role == "error" {
+			m.progressMsgs[msg.id] = msg.content
+		} else if msg.role == "assistant" && msg.content != "" {
+			m.messages = append(m.messages, chatMessage{Role: "assistant", Content: msg.content})
+		}
+
 	case runResultMsg:
 		m.isLoading = false
+		m.cleanupSubs()
+		m.progressMsgs = make(map[string]string)
+
 		if msg.err != "" {
 			m.messages = append(m.messages, chatMessage{Role: "error", Content: msg.err})
 			m.status = fmt.Sprintf("Error | Model: %s", m.currentModel)
@@ -213,13 +284,11 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 			})
 			return nil
 		}
-		oldModel := m.currentModel
 		m.currentModel = parts[1]
 		m.status = fmt.Sprintf("Model: %s", m.currentModel)
 		m.messages = append(m.messages, chatMessage{
-			Role: "system", Content: fmt.Sprintf("Model changed from %s to %s", oldModel, m.currentModel),
+			Role: "system", Content: fmt.Sprintf("Model changed to %s", m.currentModel),
 		})
-		return nil
 
 	case "/apiurl":
 		if len(parts) < 2 {
@@ -233,19 +302,17 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.messages = append(m.messages, chatMessage{
 			Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL),
 		})
-		return nil
 
 	case "/help":
-		help := "Commands:\n  /model <name>  - Change model (e.g. /model gpt-4o)\n  /apiurl <url> - Change API URL\n  /help        - Show this help\n  Ctrl+C       - Quit"
+		help := "Commands:\n  /model <name>  - Change model\n  /apiurl <url> - Change API URL\n  /help        - Show this\n  Ctrl+C       - Quit"
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: help})
-		return nil
 
 	default:
 		m.messages = append(m.messages, chatMessage{
-			Role: "system", Content: fmt.Sprintf("Unknown command: %s\nType /help for available commands.", parts[0]),
+			Role: "system", Content: fmt.Sprintf("Unknown: %s\nType /help", parts[0]),
 		})
-		return nil
 	}
+	return nil
 }
 
 func (m *tuiModel) runSession(prompt string) tea.Cmd {
@@ -262,14 +329,16 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 		client.SetAPIKey(apiKey)
 
 		system := "You are a helpful AI assistant with access to tools."
-		eventBus := bus.New()
+
+		// Create store for this session
 		store, err := storage.NewSQLiteStore(fmt.Sprintf("%s%copencode-tui.db", os.TempDir(), os.PathSeparator))
 		if err != nil {
 			return runResultMsg{err: fmt.Sprintf("Storage error: %v", err)}
 		}
 		defer store.Close()
 
-		proc := session.NewProcessor(m.proc.ExportToolRegistry(), client, store, eventBus, m.currentModel, system)
+		// Reuse the shared event bus so progress flows back to TUI
+		proc := session.NewProcessor(m.proc.ExportToolRegistry(), client, store, m.eventBus, m.currentModel, system)
 		proc.EnableSubAgents()
 
 		result, procErr := proc.Run(ctx, prompt, sessionID, "tui")
@@ -282,14 +351,4 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 			toolCalls: result.ToolCalls,
 		}
 	}
-}
-
-func trim(s string) string {
-	if len(s) > 0 && s[0] == ' ' {
-		s = s[1:]
-	}
-	if len(s) > 0 && s[len(s)-1] == ' ' {
-		s = s[:len(s)-1]
-	}
-	return s
 }

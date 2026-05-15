@@ -64,7 +64,15 @@ func render(m *tuiModel) string {
 	}
 
 	if m.isLoading {
-		b.WriteString(loadingStyle.Render("\n  Processing...\n"))
+		if len(m.progressMsgs) > 0 {
+			b.WriteString("\n")
+			for _, v := range m.progressMsgs {
+				b.WriteString(toolStyle.Render("  " + v))
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString(loadingStyle.Render("\n  🤔 Processing...\n"))
+		}
 	}
 
 	fillHeight := m.height - 2
