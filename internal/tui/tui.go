@@ -249,7 +249,6 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runResultMsg:
 		m.isLoading = false
-		m.cleanupSubs()
 		m.progressList = nil
 
 		if msg.err != "" {
