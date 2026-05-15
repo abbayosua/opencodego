@@ -1,0 +1,44 @@
+   📝 Response received (2947ms)
+   🧠 Thinking...
+   📝 Response received (36021ms)
+   🧠 Thinking...
+   📝 Response received (2101ms)
+   🧠 Thinking...
+   📝 Response received (5240ms)
+ Assistant:
+  **File `index.html` berhasil dibuat!** 🐦
+
+  Game **Flappy Bird** lengkap dengan fitur-fitur berikut:
+
+  ### 🎮 Cara Main
+  - **Klik / Tap / Spasi** → Burung melompat
+  - Hindari pipa-pipa hijau yang be
+ Assistant:
+  **File `index.html` berhasil dibuat!** 🐦
+
+  Game **Flappy Bird** lengkap dengan fitur-fitur berikut:
+
+  ### 🎮 Cara Main
+  - **Klik / Tap / Spasi** → Burung melompat
+  - Hindari pipa-pipa hijau yang bergerak
+  - Dapatkan skor setinggi mungkin!
+
+  ### ✨ Fitur
+  - **Animasi burung** dengan sayap mengepak, mata, paruh, dan ekor
+  - **Pipa acak** dengan celah yang selalu berbeda
+  - **Sistem skor** dengan penyimpanan skor terbaik (localStorage)
+  - **Partikel efek** saat kena pipa atau dapat skor
+  - **Awan berg...
+ You:
+  oke nice, sekarang rename index.html menjadi flappy.html
+ Error:
+  llm stream error: API error 400: {"error":{"message":"Error from provider (DeepS
+  eek): Failed to deserialize the JSON body into the target type: messages[7]: mis
+  sing field `text` at line 1 column 2489","type":"invalid_request_error","param":
+  null,"code":"invalid_request_error"}}
+
+
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                                                                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ 

@@ -71,7 +71,7 @@ type openAIChatMessage struct {
 
 type openAIChatPart struct {
 	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Text string `json:"text"`
 }
 
 type openAIToolCall struct {
