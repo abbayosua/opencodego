@@ -75,8 +75,9 @@ type tuiModel struct {
 	apiURL       string
 	hasAPIKey    bool
 
-	progressMsgs map[string]string
+	progressList []string
 	subIDs       []int
+	turnCount    int
 }
 
 func initialModel() tuiModel {
@@ -84,8 +85,7 @@ func initialModel() tuiModel {
 		messages: []chatMessage{
 			{Role: "system", Content: "Welcome to OpenCode-Go! Type a prompt and press Enter to start."},
 		},
-		status:       "Ready",
-		progressMsgs: make(map[string]string),
+		status: "Ready",
 	}
 }
 
@@ -145,29 +145,31 @@ func (m *tuiModel) Init() tea.Cmd {
 	// Subscribe to event bus for live progress
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
 		tc := e.(bus.ToolEvent)
-		content := fmt.Sprintf("🔧 %s %s", tc.ToolName, truncateStr(tc.Input, 60))
-		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName})
+		content := fmt.Sprintf("🔧 Step %d: %s %s", m.turnCount, tc.ToolName, truncateStr(tc.Input, 60))
+		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName + "_" + tc.SessionID})
 	}))
 
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
 		tc := e.(bus.ToolEvent)
-		content := fmt.Sprintf("✅ %s completed (%dms)", tc.ToolName, tc.DurationMs)
-		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName + "_done"})
+		content := fmt.Sprintf("✅ Step %d: %s completed (%dms)", m.turnCount, tc.ToolName, tc.DurationMs)
+		m.program.Send(progressMsg{role: "tool", content: content, id: tc.SessionID + "_done"})
 	}))
 
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolFailed, func(e bus.Event) {
 		tc := e.(bus.ToolEvent)
-		content := fmt.Sprintf("❌ %s failed: %s (%dms)", tc.ToolName, truncateStr(tc.Error, 80), tc.DurationMs)
-		m.program.Send(progressMsg{role: "error", content: content, id: tc.ToolName + "_fail"})
+		content := fmt.Sprintf("❌ Step %d: %s failed: %s (%dms)", m.turnCount, tc.ToolName, truncateStr(tc.Error, 80), tc.DurationMs)
+		m.program.Send(progressMsg{role: "error", content: content, id: tc.SessionID + "_fail"})
 	}))
 
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
-		m.program.Send(progressMsg{role: "system", content: "🧠 Thinking...", id: "llm_start"})
+		m.turnCount++
+		content := fmt.Sprintf("🧠 Step %d: Thinking...", m.turnCount)
+		m.program.Send(progressMsg{role: "system", content: content, id: "llm_start"})
 	}))
 
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMCompleted, func(e bus.Event) {
 		le := e.(bus.LLMEvent)
-		content := fmt.Sprintf("📝 Response received (%dms)", le.DurationMs)
+		content := fmt.Sprintf("📝 Step %d: Response received (%dms)", m.turnCount, le.DurationMs)
 		m.program.Send(progressMsg{role: "system", content: content, id: "llm_done"})
 	}))
 
@@ -223,6 +225,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Running on %s...", m.currentModel)
 			m.prompt = ""
 			m.lastError = ""
+			m.progressList = nil
+			m.turnCount = 0
 			return m, m.runSession(input)
 
 		case "backspace":
@@ -237,20 +241,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case progressMsg:
-		if msg.id == "llm_start" {
-			m.messages = append(m.messages, chatMessage{Role: "system", Content: "🧠 Thinking..."})
-		} else if msg.id == "llm_done" {
-			m.messages = append(m.messages, chatMessage{Role: "system", Content: msg.content})
-		} else if strings.HasPrefix(msg.role, "tool") || msg.role == "error" {
-			m.progressMsgs[msg.id] = msg.content
-		} else if msg.role == "assistant" && msg.content != "" {
+		if msg.role == "assistant" && msg.content != "" {
 			m.messages = append(m.messages, chatMessage{Role: "assistant", Content: msg.content})
+		} else if strings.HasPrefix(msg.role, "tool") || msg.role == "error" || msg.role == "system" {
+			m.progressList = append(m.progressList, msg.content)
 		}
 
 	case runResultMsg:
 		m.isLoading = false
 		m.cleanupSubs()
-		m.progressMsgs = make(map[string]string)
+		m.progressList = nil
 
 		if msg.err != "" {
 			m.messages = append(m.messages, chatMessage{Role: "error", Content: msg.err})

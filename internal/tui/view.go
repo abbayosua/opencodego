@@ -64,9 +64,15 @@ func render(m *tuiModel) string {
 	}
 
 	if m.isLoading {
-		if len(m.progressMsgs) > 0 {
+		if len(m.progressList) > 0 {
 			b.WriteString("\n")
-			for _, v := range m.progressMsgs {
+			start := 0
+			if len(m.progressList) > 8 {
+				start = len(m.progressList) - 8
+				b.WriteString(systemStyle.Render(fmt.Sprintf("  ... %d more steps", start)))
+				b.WriteString("\n")
+			}
+			for _, v := range m.progressList[start:] {
 				b.WriteString(toolStyle.Render("  " + v))
 				b.WriteString("\n")
 			}

@@ -187,9 +187,10 @@ func TestProgressMessagesRender(t *testing.T) {
 	m.width = 80
 	m.height = 24
 	m.isLoading = true
-	m.progressMsgs = map[string]string{
-		"bash":   "🔧 bash ls -la",
-		"llm_start": "🧠 Thinking...",
+	m.progressList = []string{
+		"🧠 Step 1: Thinking...",
+		"🔧 Step 1: bash ls -la",
+		"✅ Step 1: bash completed",
 	}
 
 	out := render(&m)
@@ -214,16 +215,34 @@ func TestProgressMessagesWithoutTools(t *testing.T) {
 	}
 }
 
+func TestProgressMessagesShowStepNumber(t *testing.T) {
+	m := initialModel()
+	m.ready = true
+	m.width = 80
+	m.height = 24
+	m.isLoading = true
+	m.progressList = []string{
+		"🧠 Step 1: Thinking...",
+		"🔧 Step 1: bash ls",
+		"✅ Step 1: bash completed",
+	}
+
+	out := render(&m)
+	if !strings.Contains(out, "Step 1") {
+		t.Errorf("expected Step 1 in output, got: %s", out)
+	}
+}
+
 func TestProgressMessagesClearedAfterRun(t *testing.T) {
 	m := initialModel()
 	m.isLoading = true
-	m.progressMsgs = map[string]string{"bash": "running"}
+	m.progressList = []string{"🔧 bash"}
 
 	// Simulate run completion
 	m.isLoading = false
-	m.progressMsgs = make(map[string]string)
+	m.progressList = nil
 
-	if len(m.progressMsgs) != 0 {
+	if len(m.progressList) != 0 {
 		t.Error("expected progress messages cleared")
 	}
 }
