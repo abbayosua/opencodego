@@ -90,6 +90,7 @@ type tuiModel struct {
 	tgStep        int
 	tgInput       string
 	tgSavedTokens []*storage.BotToken
+	cancelSession context.CancelFunc
 }
 
 func initialModel() tuiModel {
@@ -162,29 +163,41 @@ func (m *tuiModel) Init() tea.Cmd {
 	m.refreshViewport()
 
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
-		tc := e.(bus.ToolEvent)
+		tc, ok := e.(bus.ToolEvent)
+		if !ok {
+			return
+		}
 		content := fmt.Sprintf("🔧 Step %d: %s %s", m.turnCount, tc.ToolName, truncateStr(tc.Input, 60))
-		m.program.Send(progressMsg{role: "tool", content: content, id: tc.ToolName + "_" + tc.SessionID})
+		m.safeSend(progressMsg{role: "tool", content: content, id: tc.ToolName + "_" + tc.SessionID})
 	}))
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
-		tc := e.(bus.ToolEvent)
+		tc, ok := e.(bus.ToolEvent)
+		if !ok {
+			return
+		}
 		content := fmt.Sprintf("✅ Step %d: %s completed (%dms)", m.turnCount, tc.ToolName, tc.DurationMs)
-		m.program.Send(progressMsg{role: "tool", content: content, id: tc.SessionID + "_done"})
+		m.safeSend(progressMsg{role: "tool", content: content, id: tc.SessionID + "_done"})
 	}))
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeToolFailed, func(e bus.Event) {
-		tc := e.(bus.ToolEvent)
+		tc, ok := e.(bus.ToolEvent)
+		if !ok {
+			return
+		}
 		content := fmt.Sprintf("❌ Step %d: %s failed: %s (%dms)", m.turnCount, tc.ToolName, truncateStr(tc.Error, 80), tc.DurationMs)
-		m.program.Send(progressMsg{role: "error", content: content, id: tc.SessionID + "_fail"})
+		m.safeSend(progressMsg{role: "error", content: content, id: tc.SessionID + "_fail"})
 	}))
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
 		m.turnCount++
 		content := fmt.Sprintf("🧠 Step %d: Thinking...", m.turnCount)
-		m.program.Send(progressMsg{role: "system", content: content, id: "llm_start"})
+		m.safeSend(progressMsg{role: "system", content: content, id: "llm_start"})
 	}))
 	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeLLMCompleted, func(e bus.Event) {
-		le := e.(bus.LLMEvent)
+		le, ok := e.(bus.LLMEvent)
+		if !ok {
+			return
+		}
 		content := fmt.Sprintf("📝 Step %d: Response received (%dms)", m.turnCount, le.DurationMs)
-		m.program.Send(progressMsg{role: "system", content: content, id: "llm_done"})
+		m.safeSend(progressMsg{role: "system", content: content, id: "llm_done"})
 	}))
 
 	return nil
@@ -195,6 +208,10 @@ func (m *tuiModel) cleanupSubs() {
 		m.eventBus.UnsubscribeAll(id)
 	}
 	m.subIDs = nil
+	if m.cancelSession != nil {
+		m.cancelSession()
+		m.cancelSession = nil
+	}
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -474,6 +491,18 @@ func (m *tuiModel) startTelegramBot(ctx context.Context, token, label string) {
 	m.refreshViewport()
 }
 
+func (m *tuiModel) safeSend(msg tea.Msg) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn("tui: recovered panic in event handler", "err", fmt.Sprintf("%v", r))
+		}
+	}()
+	if m.program == nil {
+		return
+	}
+	m.program.Send(msg)
+}
+
 func (m *tuiModel) runSession(prompt string) tea.Cmd {
 	sessionID := m.sessionID
 	if sessionID == "" {
@@ -481,8 +510,16 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 		m.sessionID = sessionID
 	}
 	return func() tea.Msg {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("tui: recovered panic in runSession", "err", fmt.Sprintf("%v", r))
+			}
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		m.cancelSession = cancel
+
 		client := llm.NewClient(m.apiURL)
 		apiKey := os.Getenv("OPENCODE_API_KEY")
 		if apiKey == "" {
