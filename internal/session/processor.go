@@ -64,6 +64,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 	var allLLMEvents []llm.Event
 	turnCount := 0
 	totalTokens := 0
+	emptyResponseCount := 0
 
 	session := p.createSessionRecord(sessionID, projectID, prompt)
 	p.publishAgentStarted("default", sessionID)
@@ -163,6 +164,16 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		assistantText := textBuffer.String()
 		totalTokens += tokensIn + tokensOut
 		p.publishLLMCompleted(p.model, assistantText, tokensIn, tokensOut, time.Since(llmStartTime).Milliseconds())
+
+		// Empty response detection: if LLM returns empty text 3x in a row without tools, stop
+		if assistantText == "" && len(toolCallsInTurn) == 0 {
+			emptyResponseCount++
+			if emptyResponseCount >= 3 {
+				break
+			}
+			continue
+		}
+		emptyResponseCount = 0
 
 		for _, tc := range toolCallsInTurn {
 			assistantParts = append(assistantParts, message.Content{
@@ -289,7 +300,7 @@ func (p *Processor) publishSessionUpdated(id, title string) {
 }
 
 func (p *Processor) publishMessageSent(sessionID, role, content string) {
-	if p.bus == nil {
+	if p.bus == nil || content == "" {
 		return
 	}
 	if len(content) > 200 {
@@ -503,7 +514,7 @@ func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResu
 	output := result.Output
 	// Truncate tool output to prevent context overflow
 	if len(output) > 2000 {
-		output = output[:2000] + fmt.Sprintf("\n[...truncated %d chars]", len(result.Output)-2000)
+		output = output[:8000] + fmt.Sprintf("\n[...truncated %d chars]", len(result.Output)-8000)
 	}
 
 	return toolExecResult{
