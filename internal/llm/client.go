@@ -65,7 +65,7 @@ type StreamRequest struct {
 
 type openAIChatMessage struct {
 	Role             string             `json:"role"`
-	Content          []openAIChatPart   `json:"content,omitempty"`
+	Content          *[]openAIChatPart  `json:"content"`
 	ToolCalls        []openAIToolCall   `json:"tool_calls,omitempty"`
 	ToolCallID       string             `json:"tool_call_id,omitempty"`
 	ReasoningContent *string            `json:"reasoning_content,omitempty"`
@@ -288,11 +288,10 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 	var msgs []openAIChatMessage
 
 	if req.System != "" {
+		sysContent := []openAIChatPart{{Type: "text", Text: req.System}}
 		msgs = append(msgs, openAIChatMessage{
-			Role: "system",
-			Content: []openAIChatPart{
-				{Type: "text", Text: req.System},
-			},
+			Role:    "system",
+			Content: &sysContent,
 		})
 	}
 
@@ -305,7 +304,7 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 					content = append(content, openAIChatPart{Type: "text", Text: c.Text})
 				}
 			}
-			msgs = append(msgs, openAIChatMessage{Role: "user", Content: content})
+			msgs = append(msgs, openAIChatMessage{Role: "user", Content: &content})
 
 		case message.RoleAssistant:
 			var toolCalls []openAIToolCall
@@ -337,9 +336,7 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 				}
 			}
 			if len(textContent) > 0 {
-				msg.Content = textContent
-			} else if len(toolCalls) > 0 {
-				msg.Content = []openAIChatPart{}
+				msg.Content = &textContent
 			}
 			if len(reasoningParts) > 0 {
 				reasoningText := strings.Join(reasoningParts, "")
@@ -349,10 +346,11 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 
 		case message.RoleTool:
 			for _, c := range m.Content {
+				toolContent := []openAIChatPart{{Type: "text", Text: c.ToolOutput}}
 				msgs = append(msgs, openAIChatMessage{
 					Role:       "tool",
 					ToolCallID: c.ToolUseID,
-					Content:    []openAIChatPart{{Type: "text", Text: c.ToolOutput}},
+					Content:    &toolContent,
 				})
 			}
 		}
