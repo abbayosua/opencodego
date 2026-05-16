@@ -362,7 +362,10 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.status = fmt.Sprintf("API: %s", m.apiURL)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL)})
 	case "/help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /session         - Session info\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
+
+	case "/session":
+		m.displaySessionInfo()
 
 	case "/telegram":
 		m.tgStep = 0
@@ -374,6 +377,30 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 	m.refreshViewport()
 	m.vp.GotoBottom()
 	return nil
+}
+
+func (m *tuiModel) displaySessionInfo() {
+	sessionID := m.sessionID
+	if sessionID == "" {
+		sessionID = "TUI-" + time.Now().Format("0102-150405")
+	}
+
+	msg := fmt.Sprintf("📋 *Session Info*\n\nSession ID: %s\nChat messages: %d\nModel: %s\nHistory turns: %d",
+		sessionID,
+		len(m.messages),
+		m.currentModel,
+		len(m.chatHistory),
+	)
+
+	if m.tgActive {
+		msg += "\n\n🤖 *Telegram Bot*: Aktif"
+	} else {
+		msg += "\n\n🤖 *Telegram Bot*: Nonaktif (/telegram untuk mulai)"
+	}
+
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
+	m.refreshViewport()
+	m.vp.GotoBottom()
 }
 
 func (m *tuiModel) telegramListTokens() {
