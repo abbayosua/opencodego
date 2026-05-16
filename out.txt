@@ -1,7 +1,0 @@
-[?25l[?1049h[2J[H[?25l[?2004h[H   OpenCode-Go | Model: big-pickle                        
-                                                          
-   Welcome to OpenCode-Go! Type a prompt and press Enter. 
- ┌────────────────────────────────────────────────┐       
- │ Type a prompt and press Enter (Ctrl+C to quit) │       
- └────────────────────────────────────────────────┘       
-  Model: big-pickle | https://opencode.ai/zen/v1          [7;H
