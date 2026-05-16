@@ -63,6 +63,7 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 	toolDefs := p.loadToolDefs()
 	var allLLMEvents []llm.Event
 	turnCount := 0
+	totalTokens := 0
 
 	session := p.createSessionRecord(sessionID, projectID, prompt)
 	p.publishAgentStarted("default", sessionID)
@@ -97,6 +98,8 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		var textBuffer strings.Builder
 		var reasoningBuffer strings.Builder
 		stepComplete := false
+		tokensIn := 0
+		tokensOut := 0
 
 	loop:
 		for {
@@ -136,6 +139,8 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 
 				case llm.EventFinishStep:
 					stepComplete = true
+					tokensIn = evt.TokensIn
+					tokensOut = evt.TokensOut
 
 				case llm.EventFinish:
 					if evt.FinishReason == "stop" || evt.FinishReason == "end_turn" {
@@ -156,7 +161,8 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		}
 
 		assistantText := textBuffer.String()
-		p.publishLLMCompleted(p.model, assistantText, 0, 0, time.Since(llmStartTime).Milliseconds())
+		totalTokens += tokensIn + tokensOut
+		p.publishLLMCompleted(p.model, assistantText, tokensIn, tokensOut, time.Since(llmStartTime).Milliseconds())
 
 		for _, tc := range toolCallsInTurn {
 			assistantParts = append(assistantParts, message.Content{
@@ -211,6 +217,15 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 			if err := p.saveToolResult(sessionID, turnCount, tc, result); err != nil {
 				return nil, fmt.Errorf("save tool result: %w", err)
 			}
+		}
+
+		// Overflow detection: stop if approaching context limit (80% of 200K default)
+		if totalTokens > 160000 {
+			if len(toolCallsInTurn) == 0 {
+				// Only break immediately if no tools need executing
+				break
+			}
+			p.bus.Publish(bus.NewLLMError(p.model, "context limit approaching"))
 		}
 
 		if len(toolCallsInTurn) == 0 && stepComplete {
@@ -484,8 +499,14 @@ func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResu
 		}
 	}
 
+	output := result.Output
+	// Truncate tool output to prevent context overflow
+	if len(output) > 2000 {
+		output = output[:2000] + fmt.Sprintf("\n[...truncated %d chars]", len(result.Output)-2000)
+	}
+
 	return toolExecResult{
-		output:  result.Output,
+		output:  output,
 		isError: false,
 	}
 }

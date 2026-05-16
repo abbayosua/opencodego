@@ -44,6 +44,8 @@ type Event struct {
 	Error            string          `json:"error,omitempty"`
 	FinishReason     string          `json:"finishReason,omitempty"`
 	ProviderMetadata map[string]any  `json:"providerMetadata,omitempty"`
+	TokensIn         int             `json:"tokensIn,omitempty"`
+	TokensOut        int             `json:"tokensOut,omitempty"`
 }
 
 type ToolDef struct {
@@ -252,14 +254,25 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan Event, <
 					}
 				}
 
-				events <- Event{
-					Type:         EventFinishStep,
-					FinishReason: reason,
-				}
-				events <- Event{
-					Type:         EventFinish,
-					FinishReason: reason,
-				}
+			tokensIn := 0
+			tokensOut := 0
+			if chunk.Usage != nil {
+				tokensIn = chunk.Usage.PromptTokens
+				tokensOut = chunk.Usage.CompletionTokens
+			}
+
+			events <- Event{
+				Type:         EventFinishStep,
+				FinishReason: reason,
+				TokensIn:     tokensIn,
+				TokensOut:    tokensOut,
+			}
+			events <- Event{
+				Type:         EventFinish,
+				FinishReason: reason,
+				TokensIn:     tokensIn,
+				TokensOut:    tokensOut,
+			}
 			}
 		}
 
