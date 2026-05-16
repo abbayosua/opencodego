@@ -173,13 +173,6 @@ func (m *tuiModel) Init() tea.Cmd {
 		m.program.Send(progressMsg{role: "system", content: content, id: "llm_done"})
 	}))
 
-	m.subIDs = append(m.subIDs, m.eventBus.Subscribe(bus.TypeMessageSent, func(e bus.Event) {
-		me := e.(bus.MessageEvent)
-		if me.Role == "assistant" && me.Content != "" {
-			m.program.Send(progressMsg{role: "assistant", content: me.Content, id: "msg_" + me.SessionID})
-		}
-	}))
-
 	return nil
 }
 
@@ -241,15 +234,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case progressMsg:
-		if msg.role == "assistant" && msg.content != "" {
-			m.messages = append(m.messages, chatMessage{Role: "assistant", Content: msg.content})
-		} else if strings.HasPrefix(msg.role, "tool") || msg.role == "error" || msg.role == "system" {
+		if strings.HasPrefix(msg.role, "tool") || msg.role == "error" || msg.role == "system" {
 			m.progressList = append(m.progressList, msg.content)
 		}
 
 	case runResultMsg:
 		m.isLoading = false
 		m.progressList = nil
+		m.messages = CleanProgressMessages(m.messages)
 
 		if msg.err != "" {
 			m.messages = append(m.messages, chatMessage{Role: "error", Content: msg.err})
@@ -350,4 +342,20 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 			toolCalls: result.ToolCalls,
 		}
 	}
+}
+
+func CleanProgressMessages(msgs []chatMessage) []chatMessage {
+	var cleaned []chatMessage
+	hasResult := false
+	for _, m := range msgs {
+		if m.Role == "system" && (strings.HasPrefix(m.Content, "🧠") || strings.HasPrefix(m.Content, "📝")) {
+			continue
+		}
+		if m.Role == "assistant" && !hasResult {
+			hasResult = true
+			cleaned = append(cleaned, chatMessage{Role: "system", Content: "───── ⏎ Result ─────"})
+		}
+		cleaned = append(cleaned, m)
+	}
+	return cleaned
 }

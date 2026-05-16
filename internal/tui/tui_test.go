@@ -247,6 +247,28 @@ func TestProgressMessagesClearedAfterRun(t *testing.T) {
 	}
 }
 
+func TestCleanProgressMessages(t *testing.T) {
+	msgs := []chatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "system", Content: "🧠 Step 1: Thinking..."},
+		{Role: "system", Content: "📝 Step 1: Response received"},
+		{Role: "assistant", Content: "Hello back!"},
+	}
+	cleaned := CleanProgressMessages(msgs)
+	if len(cleaned) != 3 {
+		t.Fatalf("expected 3 messages (user + separator + assistant), got %d", len(cleaned))
+	}
+	if cleaned[0].Role != "user" {
+		t.Errorf("expected user first, got %v", cleaned[0])
+	}
+	if !strings.HasPrefix(cleaned[1].Content, "─────") {
+		t.Errorf("expected separator at index 1, got: %s", cleaned[1].Content)
+	}
+	if cleaned[2].Content != "Hello back!" {
+		t.Errorf("expected assistant message at index 2, got: %s", cleaned[2].Content)
+	}
+}
+
 func TestTruncateStr(t *testing.T) {
 	if truncateStr("short", 10) != "short" {
 		t.Errorf("expected 'short', got %q", truncateStr("short", 10))

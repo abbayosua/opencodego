@@ -20,6 +20,7 @@ var (
 	systemStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
 	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	loadingStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	separatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Faint(true)
 )
 
 func render(m *tuiModel) string {
@@ -118,6 +119,9 @@ func renderMessage(msg chatMessage, width int) string {
 	case "tool":
 		header = toolStyle.Render("Tool:")
 	case "system":
+		if strings.HasPrefix(msg.Content, "─────") {
+			return separatorStyle.Render("  " + msg.Content)
+		}
 		return systemStyle.Render("  " + msg.Content)
 	case "error":
 		header = errorStyle.Render("Error:")
