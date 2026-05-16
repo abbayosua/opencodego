@@ -146,7 +146,13 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	}
 	defer store.Close()
 
-	proc := session.NewProcessor(reg, client, store, bus.New(), cfg.model, system)
+	eventBus := bus.New()
+	if log.Default.Enabled(log.LevelDebug) {
+		eventBus.SubscribeAll(func(e bus.Event) {
+			log.Debug("bus."+e.Type(), "type", e.Type())
+		})
+	}
+	proc := session.NewProcessor(reg, client, store, eventBus, cfg.model, system)
 	proc.EnableSubAgents()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

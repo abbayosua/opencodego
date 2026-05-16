@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
+	"github.com/opencode-go/opencode/internal/log"
 	"github.com/opencode-go/opencode/internal/message"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
@@ -100,6 +101,14 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	defer store.Close()
 
 	eventBus := bus.New()
+
+	// Subscribe bus events to global logger
+	if log.Default.Enabled(log.LevelDebug) {
+		eventBus.SubscribeAll(func(e bus.Event) {
+			log.Debug("bus."+e.Type(), "type", e.Type())
+		})
+	}
+
 	client := llm.NewClient(apiURL)
 	if apiKey != "" {
 		client.SetAPIKey(apiKey)
