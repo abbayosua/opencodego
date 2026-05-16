@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
+	"github.com/opencode-go/opencode/internal/log"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
@@ -32,7 +34,7 @@ func main() {
 	reg.Register(tool.GrepTool())
 	reg.Register(tool.GlobTool())
 	reg.Register(tool.TaskTool())
-	reg.Register(tool.TaskTool())
+	initLogging()
 
 	ctx := context.Background()
 	toolCtx := tool.Context{Context: ctx}
@@ -180,6 +182,36 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 	}
 
 	fmt.Fprintf(os.Stderr, "✅ Done in %v\n", elapsed.Round(time.Millisecond))
+}
+
+func initLogging() {
+	// Parse global log flags before other commands
+	for i, arg := range os.Args {
+		if arg == "--log-level" && i+1 < len(os.Args) {
+			if err := log.SetLevelString(os.Args[i+1]); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+			}
+		}
+		if arg == "--log-file" && i+1 < len(os.Args) {
+			f, err := os.Create(os.Args[i+1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: cannot create log file: %v\n", err)
+			} else {
+				log.SetOutput(io.MultiWriter(os.Stderr, f))
+			}
+		}
+		if arg == "--log-json" {
+			log.SetJSON(true)
+		}
+	}
+}
+
+func subscribeBusToLog(eventBus *bus.Bus) {
+	eventBus.SubscribeAll(func(e bus.Event) {
+		log.Debug("bus."+e.Type(),
+			"type", e.Type(),
+		)
+	})
 }
 
 func tuiCmd() {
