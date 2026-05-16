@@ -356,14 +356,12 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 		}
 	}
 
-	// DeepSeek requires reasoning_content on ALL assistant messages, even if empty
-	modelLower := strings.ToLower(req.Model)
-	if strings.Contains(modelLower, "deepseek") {
-		for i := range msgs {
-			if msgs[i].Role == "assistant" && msgs[i].ReasoningContent == nil {
-				empty := ""
-				msgs[i].ReasoningContent = &empty
-			}
+	// Always inject reasoning_content on ALL assistant messages
+	// DeepSeek (including big-pickle) requires it on every assistant message
+	for i := range msgs {
+		if msgs[i].Role == "assistant" && msgs[i].ReasoningContent == nil {
+			empty := ""
+			msgs[i].ReasoningContent = &empty
 		}
 	}
 
