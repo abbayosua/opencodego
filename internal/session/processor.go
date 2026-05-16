@@ -513,7 +513,7 @@ func (p *Processor) executeTool(ctx context.Context, evt llm.Event) toolExecResu
 
 	output := result.Output
 	// Truncate tool output to prevent context overflow
-	if len(output) > 2000 {
+	if len(output) > 8000 {
 		output = output[:8000] + fmt.Sprintf("\n[...truncated %d chars]", len(result.Output)-8000)
 	}
 
