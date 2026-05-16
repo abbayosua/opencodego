@@ -2,9 +2,7 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/opencode-go/opencode/internal/llm"
 	"github.com/opencode-go/opencode/internal/log"
 	"github.com/opencode-go/opencode/internal/message"
+	"github.com/opencode-go/opencode/internal/provider"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/task"
@@ -502,49 +501,39 @@ func (m *tuiModel) displaySessionInfo() {
 }
 
 func (m *tuiModel) fetchModelList() {
-	key := m.apiKey
-	if key == "" {
-		key = "public"
-	}
-
-	req, _ := http.NewRequest("GET", "https://opencode.ai/zen/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("HTTP-Referer", "https://opencode.ai/")
-	req.Header.Set("X-Title", "opencode")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal fetch model: %v", err)})
-		m.refreshViewport()
-		return
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Data []struct {
-			ID   string `json:"id"`
-			Name string `json:"name,omitempty"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal parse model: %v", err)})
+	catalog := provider.NewCatalog()
+	if err := catalog.Refresh(); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal fetch model catalog: %v", err)})
 		m.refreshViewport()
 		return
 	}
 
-	msg := "Available models:\n"
-	for i, model := range result.Data {
-		if i >= 30 {
-			msg += fmt.Sprintf("... dan %d lainnya\n", len(result.Data)-30)
-			break
+	// Free models from opencode provider (Zen)
+	free := catalog.ListFreeModels("opencode")
+	msg := "Free models (OpenCode Zen):\n"
+	for _, model := range free {
+		tools := ""
+		if model.ToolCall {
+			tools = " tools"
 		}
-		name := model.Name
-		if name == "" {
-			name = model.ID
+		ctx := ""
+		if model.Limit != nil {
+			ctx = fmt.Sprintf(" %dK ctx", model.Limit.Context/1000)
 		}
-		msg += fmt.Sprintf("  %s\n", model.ID)
+		msg += fmt.Sprintf("  %s%s%s\n", model.ID, ctx, tools)
 	}
+
+	msg += "\nOther providers:\n"
+	for _, pid := range catalog.ListProviders() {
+		if pid == "opencode" {
+			continue
+		}
+		models := catalog.ListModels(pid)
+		if len(models) > 0 {
+			msg += fmt.Sprintf("  %s: %s, ...\n", pid, models[0].ID)
+		}
+	}
+
 	msg += "\nGunakan: /model <name>"
 	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
 	m.refreshViewport()
