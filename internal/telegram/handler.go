@@ -68,8 +68,6 @@ func (b *Bot) cmdModel(ctx context.Context, chatID int64, modelName string) {
 func (b *Bot) handlePrompt(ctx context.Context, chatID int64, prompt string) {
 	cs := b.getOrCreateSession(ctx, chatID)
 
-	b.sendText(ctx, chatID, "Memproses...")
-
 	client := llm.NewClient(b.apiURL)
 	client.SetAPIKey(b.apiKey)
 
@@ -82,6 +80,40 @@ func (b *Bot) handlePrompt(ctx context.Context, chatID int64, prompt string) {
 		return
 	}
 	defer store.Close()
+
+	// Subscribe progress events for real-time updates
+	lastSent := time.Now()
+	sendProgress := func(msg string) {
+		if time.Since(lastSent) < 300*time.Millisecond {
+			return
+		}
+		lastSent = time.Now()
+		b.sendText(ctx, chatID, msg)
+	}
+
+	subIDs := []int{
+		eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
+			sendProgress("🧠 Thinking...")
+		}),
+		eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
+			tc := e.(bus.ToolEvent)
+			msg := fmt.Sprintf("🔧 %s %s", tc.ToolName, truncateStr(tc.Input, 60))
+			sendProgress(msg)
+		}),
+		eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
+			tc := e.(bus.ToolEvent)
+			sendProgress(fmt.Sprintf("✅ %s (%dms)", tc.ToolName, tc.DurationMs))
+		}),
+		eventBus.Subscribe(bus.TypeToolFailed, func(e bus.Event) {
+			tc := e.(bus.ToolEvent)
+			sendProgress(fmt.Sprintf("❌ %s gagal: %s", tc.ToolName, truncateStr(tc.Error, 80)))
+		}),
+	}
+	defer func() {
+		for _, id := range subIDs {
+			eventBus.UnsubscribeAll(id)
+		}
+	}()
 
 	proc := session.NewProcessor(b.reg, client, store, eventBus, cs.Model, system)
 	proc.EnableSubAgents()
@@ -182,6 +214,13 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
 	return fmt.Sprintf("%dm %.0fs", int(d.Minutes()), d.Seconds()-float64(int(d.Minutes()))*60)
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }
 
 func splitMessage(text string, maxLen int) []string {
