@@ -212,14 +212,6 @@ func initLogging() {
 	}
 }
 
-func subscribeBusToLog(eventBus *bus.Bus) {
-	eventBus.SubscribeAll(func(e bus.Event) {
-		log.Debug("bus."+e.Type(),
-			"type", e.Type(),
-		)
-	})
-}
-
 func tuiCmd() {
 	reg := tool.NewRegistry()
 	reg.Register(tool.ReadTool())
