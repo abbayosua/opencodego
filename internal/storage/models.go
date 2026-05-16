@@ -68,3 +68,34 @@ type ListMessagesFilter struct {
 	Limit     int
 	Offset    int
 }
+
+type BotToken struct {
+	ID         string    `json:"id"`
+	Token      string    `json:"token"`
+	Label      string    `json:"label,omitempty"`
+	OwnerChatID int64    `json:"owner_chat_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+type TelegramSession struct {
+	ChatID    int64     `json:"chat_id"`
+	SessionID string    `json:"session_id"`
+	History   string    `json:"history"`
+	Model     string    `json:"model"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type CreateBotTokenInput struct {
+	ID          string
+	Token       string
+	Label       string
+	OwnerChatID int64
+}
+
+type CreateTelegramSessionInput struct {
+	ChatID    int64
+	SessionID string
+	Model     string
+}

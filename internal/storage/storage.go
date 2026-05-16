@@ -25,6 +25,19 @@ type Store interface {
 	// Session + Messages (full tree)
 	GetSessionWithMessages(ctx context.Context, sessionID string) (*Session, []*Message, error)
 
+	// Bot Token operations
+	SaveBotToken(ctx context.Context, input CreateBotTokenInput) (*BotToken, error)
+	ListBotTokens(ctx context.Context) ([]*BotToken, error)
+	GetBotToken(ctx context.Context, id string) (*BotToken, error)
+	DeleteBotToken(ctx context.Context, id string) error
+	UpdateBotTokenLastUsed(ctx context.Context, id string) error
+
+	// Telegram Session operations
+	SaveTelegramSession(ctx context.Context, input CreateTelegramSessionInput) (*TelegramSession, error)
+	GetTelegramSession(ctx context.Context, chatID int64) (*TelegramSession, error)
+	UpdateTelegramSession(ctx context.Context, chatID int64, history string, model string) error
+	DeleteTelegramSession(ctx context.Context, chatID int64) error
+
 	// Close
 	Close() error
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/opencode-go/opencode/internal/message"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
+	"github.com/opencode-go/opencode/internal/telegram"
 	"github.com/opencode-go/opencode/internal/tool"
 )
 
@@ -82,8 +83,13 @@ type tuiModel struct {
 	progressList []string
 	subIDs       []int
 	turnCount    int
-	chatHistory  []message.Message
-	sessionID    string
+	chatHistory   []message.Message
+	sessionID     string
+	tgBot         *telegram.Bot
+	tgActive      bool
+	tgStep        int
+	tgInput       string
+	tgSavedTokens []*storage.BotToken
 }
 
 func initialModel() tuiModel {
@@ -236,6 +242,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 
+			// Telegram setup mode
+			if m.tgStep > 0 {
+				m.messages = append(m.messages, chatMessage{Role: "user", Content: input})
+				m.handleTelegramStep(input)
+				m.refreshViewport()
+				m.vp.GotoBottom()
+				return m, nil
+			}
+
 			if strings.HasPrefix(input, "/") {
 				return m, m.handleCommand(input)
 			}
@@ -347,13 +362,89 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.status = fmt.Sprintf("API: %s", m.apiURL)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL)})
 	case "/help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>  - Change model\n  /apiurl <url> - Change API URL\n  /help        - Show this\n  pgup/pgdn    - Scroll\n  Ctrl+C       - Quit"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
+
+	case "/telegram":
+		m.tgStep = 0
+		m.telegramListTokens()
+
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Unknown: %s\nType /help", parts[0])})
 	}
 	m.refreshViewport()
 	m.vp.GotoBottom()
 	return nil
+}
+
+func (m *tuiModel) telegramListTokens() {
+	tokenPtrs, err := m.store.ListBotTokens(context.Background())
+	if err != nil || len(tokenPtrs) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Telegram Bot - Belum ada token tersimpan. Ketik token bot Telegram kamu:"})
+		m.tgStep = 1
+		return
+	}
+	m.tgSavedTokens = tokenPtrs
+	msg := "Telegram Bot\n\nSaved bots:\n"
+	for i, t := range tokenPtrs {
+		masked := maskToken(t.Token)
+		msg += fmt.Sprintf("  %d) %s (%s)\n", i+1, t.ID, masked)
+	}
+	msg += fmt.Sprintf("\n  %d) Masukkan token baru\n\nKetik nomor atau paste token:", len(tokenPtrs)+1)
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
+	m.tgStep = 1
+}
+
+func maskToken(token string) string {
+	if len(token) <= 8 {
+		return "••••"
+	}
+	return token[:4] + "••••" + token[len(token)-4:]
+}
+
+func (m *tuiModel) handleTelegramStep(input string) {
+	ctx := context.Background()
+	if m.tgStep == 1 {
+		// Check if user selected a saved token by number
+		if len(m.tgSavedTokens) > 0 {
+			for i, t := range m.tgSavedTokens {
+				if input == fmt.Sprintf("%d", i+1) {
+					m.startTelegramBot(ctx, t.Token, t.ID)
+					return
+				}
+			}
+		}
+		// Treat as new token
+		label := "bot_" + time.Now().Format("150405")
+		m.store.SaveBotToken(ctx, storage.CreateBotTokenInput{
+			ID: label, Token: input, Label: label,
+		})
+		m.startTelegramBot(ctx, input, label)
+	}
+}
+
+func (m *tuiModel) startTelegramBot(ctx context.Context, token, label string) {
+	if m.tgActive {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "⚠️ Bot Telegram sudah aktif."})
+		return
+	}
+
+	bot := telegram.New(token, m.proc.ExportToolRegistry(), m.apiURL, "", m.currentModel, m.store)
+
+	// Start bot in background
+	go func() {
+		if err := bot.Run(ctx, 0); err != nil {
+			m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal start bot: %v", err)})
+			m.refreshViewport()
+			return
+		}
+	}()
+
+	m.tgBot = bot
+	m.tgActive = true
+	m.tgStep = 0
+	m.store.UpdateBotTokenLastUsed(ctx, label)
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("✅ Bot Telegram '%s' aktif!\nChat ID kamu: %d\n\nKirim pesan ke bot di Telegram untuk mulai.", label, bot.OwnerID())})
+	m.refreshViewport()
 }
 
 func (m *tuiModel) runSession(prompt string) tea.Cmd {

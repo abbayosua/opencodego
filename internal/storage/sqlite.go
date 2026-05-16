@@ -84,6 +84,24 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_part_message ON message_part(message_id);
 	CREATE INDEX IF NOT EXISTS idx_part_session ON message_part(session_id);
+
+	CREATE TABLE IF NOT EXISTS bot_token (
+		id TEXT PRIMARY KEY,
+		token TEXT NOT NULL,
+		label TEXT NOT NULL DEFAULT '',
+		owner_chat_id INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		last_used_at INTEGER NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS telegram_session (
+		chat_id INTEGER PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		history TEXT NOT NULL DEFAULT '[]',
+		model TEXT NOT NULL DEFAULT 'big-pickle',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
 	`
 
 	_, err := s.db.Exec(schema)
@@ -311,6 +329,109 @@ func (s *SQLiteStore) DeletePart(ctx context.Context, id string) error {
 		return fmt.Errorf("delete part: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) SaveBotToken(ctx context.Context, input CreateBotTokenInput) (*BotToken, error) {
+	now := now()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO bot_token (id, token, label, owner_chat_id, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET token=excluded.token, label=excluded.label, owner_chat_id=excluded.owner_chat_id, last_used_at=excluded.last_used_at`,
+		input.ID, input.Token, input.Label, input.OwnerChatID, now, now)
+	if err != nil {
+		return nil, fmt.Errorf("save bot token: %w", err)
+	}
+	return s.GetBotToken(ctx, input.ID)
+}
+
+func (s *SQLiteStore) GetBotToken(ctx context.Context, id string) (*BotToken, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, token, label, owner_chat_id, created_at, last_used_at FROM bot_token WHERE id=?`, id)
+	bt := &BotToken{}
+	var createdAt, lastUsedAt int64
+	err := row.Scan(&bt.ID, &bt.Token, &bt.Label, &bt.OwnerChatID, &createdAt, &lastUsedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bot token: %w", err)
+	}
+	bt.CreatedAt = time.UnixMilli(createdAt)
+	bt.LastUsedAt = time.UnixMilli(lastUsedAt)
+	return bt, nil
+}
+
+func (s *SQLiteStore) ListBotTokens(ctx context.Context) ([]*BotToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, token, label, owner_chat_id, created_at, last_used_at FROM bot_token ORDER BY last_used_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list bot tokens: %w", err)
+	}
+	defer rows.Close()
+	var tokens []*BotToken
+	for rows.Next() {
+		bt := &BotToken{}
+		var createdAt, lastUsedAt int64
+		if err := rows.Scan(&bt.ID, &bt.Token, &bt.Label, &bt.OwnerChatID, &createdAt, &lastUsedAt); err != nil {
+			return nil, fmt.Errorf("scan bot token: %w", err)
+		}
+		bt.CreatedAt = time.UnixMilli(createdAt)
+		bt.LastUsedAt = time.UnixMilli(lastUsedAt)
+		tokens = append(tokens, bt)
+	}
+	return tokens, nil
+}
+
+func (s *SQLiteStore) DeleteBotToken(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM bot_token WHERE id=?`, id)
+	return err
+}
+
+func (s *SQLiteStore) UpdateBotTokenLastUsed(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE bot_token SET last_used_at=? WHERE id=?`, now(), id)
+	return err
+}
+
+func (s *SQLiteStore) SaveTelegramSession(ctx context.Context, input CreateTelegramSessionInput) (*TelegramSession, error) {
+	now := now()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO telegram_session (chat_id, session_id, history, model, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(chat_id) DO UPDATE SET session_id=excluded.session_id, updated_at=excluded.updated_at`,
+		input.ChatID, input.SessionID, "[]", input.Model, now, now)
+	if err != nil {
+		return nil, fmt.Errorf("save telegram session: %w", err)
+	}
+	return s.GetTelegramSession(ctx, input.ChatID)
+}
+
+func (s *SQLiteStore) GetTelegramSession(ctx context.Context, chatID int64) (*TelegramSession, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT chat_id, session_id, history, model, created_at, updated_at FROM telegram_session WHERE chat_id=?`, chatID)
+	ts := &TelegramSession{}
+	var createdAt, updatedAt int64
+	err := row.Scan(&ts.ChatID, &ts.SessionID, &ts.History, &ts.Model, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get telegram session: %w", err)
+	}
+	ts.CreatedAt = time.UnixMilli(createdAt)
+	ts.UpdatedAt = time.UnixMilli(updatedAt)
+	return ts, nil
+}
+
+func (s *SQLiteStore) UpdateTelegramSession(ctx context.Context, chatID int64, history string, model string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE telegram_session SET history=?, model=?, updated_at=? WHERE chat_id=?`,
+		history, model, now(), chatID)
+	return err
+}
+
+func (s *SQLiteStore) DeleteTelegramSession(ctx context.Context, chatID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM telegram_session WHERE chat_id=?`, chatID)
+	return err
 }
 
 func (s *SQLiteStore) GetSessionWithMessages(ctx context.Context, sessionID string) (*Session, []*Message, error) {
