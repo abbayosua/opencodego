@@ -148,9 +148,7 @@ func runCmd(fs *flag.FlagSet, reg *tool.Registry) {
 
 	eventBus := bus.New()
 	if log.Default.Enabled(log.LevelDebug) {
-		eventBus.SubscribeAll(func(e bus.Event) {
-			log.Debug("bus."+e.Type(), "type", e.Type())
-		})
+		tui.SubscribeBusToLog(eventBus)
 	}
 	proc := session.NewProcessor(reg, client, store, eventBus, cfg.model, system)
 	proc.EnableSubAgents()

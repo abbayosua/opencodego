@@ -7,3 +7,6 @@ internal/tool/tool_test.go.bak
 *.html
 *.js
 *.css
+*.log
+err.txt
+out.txt

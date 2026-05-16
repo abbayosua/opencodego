@@ -102,11 +102,9 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 
 	eventBus := bus.New()
 
-	// Subscribe bus events to global logger
+	// Subscribe bus events to global logger with rich details
 	if log.Default.Enabled(log.LevelDebug) {
-		eventBus.SubscribeAll(func(e bus.Event) {
-			log.Debug("bus."+e.Type(), "type", e.Type())
-		})
+		SubscribeBusToLog(eventBus)
 	}
 
 	client := llm.NewClient(apiURL)
@@ -365,6 +363,57 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 			toolCalls: result.ToolCalls,
 		}
 	}
+}
+
+func SubscribeBusToLog(eventBus *bus.Bus) {
+	eventBus.Subscribe(bus.TypeMessageSent, func(e bus.Event) {
+		me := e.(bus.MessageEvent)
+		content := truncateStr(me.Content, 200)
+		log.Debug("bus.message.sent", "role", me.Role, "session", me.SessionID, "content", content)
+	})
+	eventBus.Subscribe(bus.TypeToolCalled, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		input := truncateStr(tc.Input, 100)
+		log.Debug("bus.tool.called", "tool", tc.ToolName, "session", tc.SessionID, "input", input)
+	})
+	eventBus.Subscribe(bus.TypeToolCompleted, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		output := truncateStr(tc.Output, 200)
+		log.Debug("bus.tool.completed", "tool", tc.ToolName, "session", tc.SessionID, "duration_ms", fmt.Sprintf("%d", tc.DurationMs), "output", output)
+	})
+	eventBus.Subscribe(bus.TypeToolFailed, func(e bus.Event) {
+		tc := e.(bus.ToolEvent)
+		log.Debug("bus.tool.failed", "tool", tc.ToolName, "session", tc.SessionID, "error", tc.Error, "duration_ms", fmt.Sprintf("%d", tc.DurationMs))
+	})
+	eventBus.Subscribe(bus.TypeLLMStarted, func(e bus.Event) {
+		le := e.(bus.LLMEvent)
+		log.Debug("bus.llm.started", "model", le.Model)
+	})
+	eventBus.Subscribe(bus.TypeLLMCompleted, func(e bus.Event) {
+		le := e.(bus.LLMEvent)
+		resp := truncateStr(le.Response, 200)
+		log.Debug("bus.llm.completed", "model", le.Model, "duration_ms", fmt.Sprintf("%d", le.DurationMs), "tokens_in", fmt.Sprintf("%d", le.TokensIn), "tokens_out", fmt.Sprintf("%d", le.TokensOut), "response", resp)
+	})
+	eventBus.Subscribe(bus.TypeLLMError, func(e bus.Event) {
+		le := e.(bus.LLMEvent)
+		log.Debug("bus.llm.error", "model", le.Model, "error", le.Error)
+	})
+	eventBus.Subscribe(bus.TypeSessionCreated, func(e bus.Event) {
+		se := e.(bus.SessionEvent)
+		log.Debug("bus.session.created", "session", se.SessionID, "model", se.Model, "title", se.Title)
+	})
+	eventBus.Subscribe(bus.TypeSessionUpdated, func(e bus.Event) {
+		se := e.(bus.SessionEvent)
+		log.Debug("bus.session.updated", "session", se.SessionID, "title", se.Title)
+	})
+	eventBus.Subscribe(bus.TypeAgentStarted, func(e bus.Event) {
+		ae := e.(bus.AgentEvent)
+		log.Debug("bus.agent.started", "agent", ae.AgentName, "session", ae.SessionID)
+	})
+	eventBus.Subscribe(bus.TypeAgentCompleted, func(e bus.Event) {
+		ae := e.(bus.AgentEvent)
+		log.Debug("bus.agent.completed", "agent", ae.AgentName, "session", ae.SessionID)
+	})
 }
 
 func CleanProgressMessages(msgs []chatMessage) []chatMessage {
