@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/opencode-go/opencode/internal/bus"
 	"github.com/opencode-go/opencode/internal/llm"
+	"github.com/opencode-go/opencode/internal/message"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
 	"github.com/opencode-go/opencode/internal/tool"
@@ -78,6 +79,8 @@ type tuiModel struct {
 	progressList []string
 	subIDs       []int
 	turnCount    int
+	chatHistory  []message.Message
+	sessionID    string
 }
 
 func initialModel() tuiModel {
@@ -307,8 +310,13 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 }
 
 func (m *tuiModel) runSession(prompt string) tea.Cmd {
+	sessionID := m.sessionID
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("tui_%d", time.Now().UnixNano())
+		m.sessionID = sessionID
+	}
+
 	return func() tea.Msg {
-		sessionID := fmt.Sprintf("tui_%d_%d", time.Now().UnixNano(), time.Now().UnixMilli())
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
@@ -321,20 +329,26 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 
 		system := "You are a helpful AI assistant with access to tools."
 
-		// Create store for this session
 		store, err := storage.NewSQLiteStore(fmt.Sprintf("%s%copencode-tui.db", os.TempDir(), os.PathSeparator))
 		if err != nil {
 			return runResultMsg{err: fmt.Sprintf("Storage error: %v", err)}
 		}
-		defer store.Close()
 
-		// Reuse the shared event bus so progress flows back to TUI
 		proc := session.NewProcessor(m.proc.ExportToolRegistry(), client, store, m.eventBus, m.currentModel, system)
 		proc.EnableSubAgents()
 
-		result, procErr := proc.Run(ctx, prompt, sessionID, "tui")
+		var history []message.Message
+		if len(m.chatHistory) > 0 {
+			history = m.chatHistory
+		}
+
+		result, procErr := proc.Run(ctx, prompt, sessionID, "tui", history)
 		if procErr != nil {
 			return runResultMsg{err: procErr.Error()}
+		}
+
+		if len(result.Messages) > 0 {
+			m.chatHistory = result.Messages
 		}
 
 		return runResultMsg{

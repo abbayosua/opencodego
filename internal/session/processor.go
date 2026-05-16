@@ -45,7 +45,7 @@ type RunResult struct {
 	FinalText  string
 }
 
-func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string) (*RunResult, error) {
+func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string, prevHistory ...[]message.Message) (*RunResult, error) {
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("sess_%d", time.Now().UnixNano())
 	}
@@ -53,9 +53,12 @@ func (p *Processor) Run(ctx context.Context, prompt, sessionID, projectID string
 		projectID = "default"
 	}
 
-	history := []message.Message{
-		message.NewTextMessage(message.RoleUser, prompt),
+	var history []message.Message
+	if len(prevHistory) > 0 {
+		history = make([]message.Message, len(prevHistory[0]))
+		copy(history, prevHistory[0])
 	}
+	history = append(history, message.NewTextMessage(message.RoleUser, prompt))
 
 	toolDefs := p.loadToolDefs()
 	var allLLMEvents []llm.Event
