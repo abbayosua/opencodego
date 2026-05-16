@@ -338,6 +338,8 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 			}
 			if len(textContent) > 0 {
 				msg.Content = textContent
+			} else if len(toolCalls) > 0 {
+				msg.Content = []openAIChatPart{}
 			}
 			if len(reasoningParts) > 0 {
 				reasoningText := strings.Join(reasoningParts, "")

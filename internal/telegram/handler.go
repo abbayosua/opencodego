@@ -129,7 +129,7 @@ func (b *Bot) handlePrompt(ctx context.Context, chatID int64, prompt string) {
 
 	if result != nil && len(result.Messages) > 0 {
 		b.mu.Lock()
-		cs.History = append(cs.History, result.Messages...)
+		cs.History = result.Messages
 		if len(cs.History) > 100 {
 			cs.History = cs.History[len(cs.History)-100:]
 		}
