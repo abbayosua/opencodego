@@ -14,24 +14,33 @@ import (
 )
 
 type Runner struct {
-	tools   *tool.Registry
-	client  *llm.Client
-	model   string
-	apiKey  string
-	apiURL  string
-	workdir string
+	tools      *tool.Registry
+	client     *llm.Client
+	model      string
+	apiKey     string
+	apiURL     string
+	workdir    string
+	feedbackCh chan string
 }
 
 func NewRunner(tools *tool.Registry, apiURL, apiKey, model, workdir string) *Runner {
 	client := llm.NewClient(apiURL)
 	client.SetAPIKey(apiKey)
 	return &Runner{
-		tools:   tools,
-		client:  client,
-		model:   model,
-		apiKey:  apiKey,
-		apiURL:  apiURL,
-		workdir: workdir,
+		tools:      tools,
+		client:     client,
+		model:      model,
+		apiKey:     apiKey,
+		apiURL:     apiURL,
+		workdir:    workdir,
+		feedbackCh: make(chan string, 10),
+	}
+}
+
+func (r *Runner) SendFeedback(msg string) {
+	select {
+	case r.feedbackCh <- msg:
+	default:
 	}
 }
 
@@ -44,6 +53,13 @@ func (r *Runner) Run(ctx context.Context, plan *Plan, onProgress func(iteration 
 			plan.Evaluation = "Task stopped by user"
 			SavePlan(r.workdir, plan)
 			return nil
+		case feedback := <-r.feedbackCh:
+			plan.AddTaskAt(0, "[FEEDBACK] "+feedback)
+			plan.Evaluation = fmt.Sprintf("Feedback diterima: %s", feedback)
+			SavePlan(r.workdir, plan)
+			if onProgress != nil {
+				onProgress(plan.Iteration, fmt.Sprintf("Feedback: %s", feedback))
+			}
 		default:
 		}
 
@@ -51,17 +67,44 @@ func (r *Runner) Run(ctx context.Context, plan *Plan, onProgress func(iteration 
 		next := plan.NextPending()
 
 		if next == nil {
+			if plan.IsComplete() {
+				if onProgress != nil {
+					onProgress(plan.Iteration, "Always-on: menunggu 30 detik...")
+				}
+
+				select {
+				case <-time.After(30 * time.Second):
+					done, newTask := r.evaluateProject(ctx, system, plan)
+					if done && newTask == "" {
+						continue
+					}
+					if !done && newTask != "" {
+						plan.AddTask(newTask)
+						plan.Evaluation = fmt.Sprintf("Menambahkan: %s", newTask)
+						SavePlan(r.workdir, plan)
+						if onProgress != nil {
+							onProgress(plan.Iteration, fmt.Sprintf("Task baru: %s", newTask))
+						}
+					}
+				case feedback := <-r.feedbackCh:
+					plan.AddTaskAt(0, "[FEEDBACK] "+feedback)
+					plan.Evaluation = fmt.Sprintf("Feedback diterima: %s", feedback)
+					SavePlan(r.workdir, plan)
+					if onProgress != nil {
+						onProgress(plan.Iteration, fmt.Sprintf("Feedback: %s", feedback))
+					}
+				case <-ctx.Done():
+					return nil
+				}
+				continue
+			}
+
 			if onProgress != nil {
-				onProgress(plan.Iteration, "Evaluasi hasil, cari yang perlu di-improve...")
+				onProgress(plan.Iteration, "Evaluasi hasil...")
 			}
 			done, newTask := r.evaluateProject(ctx, system, plan)
 			if done {
-				plan.Evaluation = "Project complete"
-				SavePlan(r.workdir, plan)
-				if onProgress != nil {
-					onProgress(plan.Iteration, "Project selesai!")
-				}
-				return nil
+				continue
 			}
 			plan.AddTask(newTask)
 			plan.Evaluation = fmt.Sprintf("Menambahkan: %s", newTask)
@@ -125,13 +168,11 @@ Complete this task. Use tools to explore and modify the project as needed.`, pla
 		if onProgress != nil {
 			onProgress(plan.Iteration, fmt.Sprintf("Selesai: %s", next.Desc))
 		}
-
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 
 func (r *Runner) evaluateProject(ctx context.Context, system string, plan *Plan) (bool, string) {
-	progress := ""
+	var progress string
 	for _, t := range plan.Tasks {
 		if t.Status == StatusCompleted {
 			progress += fmt.Sprintf("- %s\n", t.Desc)
@@ -182,7 +223,6 @@ loop:
 	if text == "" || text == "DONE" {
 		return true, ""
 	}
-
 	if len(text) > 100 {
 		text = text[:100]
 	}

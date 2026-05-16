@@ -77,6 +77,34 @@ func (p *Plan) AddTask(desc string) {
 	})
 }
 
+func (p *Plan) AddTaskAt(index int, desc string) {
+	newTask := Task{
+		ID:     len(p.Tasks) + 1,
+		Desc:   desc,
+		Status: StatusPending,
+	}
+	if index < 0 || index >= len(p.Tasks) {
+		p.Tasks = append(p.Tasks, newTask)
+		return
+	}
+	p.Tasks = append(p.Tasks, Task{}) // make room
+	copy(p.Tasks[index+1:], p.Tasks[index:])
+	p.Tasks[index] = newTask
+	// renumber
+	for i := range p.Tasks {
+		p.Tasks[i].ID = i + 1
+	}
+}
+
+func (p *Plan) IsComplete() bool {
+	for _, t := range p.Tasks {
+		if t.Status == StatusPending || t.Status == StatusRunning {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *Plan) Progress() int {
 	if len(p.Tasks) == 0 {
 		return 0

@@ -92,8 +92,13 @@ type tuiModel struct {
 	tgInput       string
 	tgSavedTokens []*storage.BotToken
 	cancelSession context.CancelFunc
-	taskRunners map[string]context.CancelFunc
+	taskRunners map[string]*taskRunState
 	taskResults map[string]string
+}
+
+type taskRunState struct {
+	cancel context.CancelFunc
+	runner *task.Runner
 }
 
 func initialModel() tuiModel {
@@ -102,7 +107,7 @@ func initialModel() tuiModel {
 			{Role: "system", Content: "Welcome to OpenCode-Go! Type a prompt and press Enter to start."},
 		},
 		status:      "Ready",
-		taskRunners: make(map[string]context.CancelFunc),
+		taskRunners: make(map[string]*taskRunState),
 		taskResults: make(map[string]string),
 	}
 }
@@ -384,7 +389,7 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.status = fmt.Sprintf("API: %s", m.apiURL)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL)})
 	case "/help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /session         - Session info\n  /task start/stop - Long running task\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>       - Change model\n  /apiurl <url>      - Change API URL\n  /telegram          - Telegram bot\n  /session           - Session info\n  /task start <goal> - Start long running task\n  /task list         - List tasks\n  /task stop <id>    - Stop task\n  /task feedback <id> <msg> - Send feedback\n  /help              - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C             - Quit"})
 
 	case "/session":
 		m.displaySessionInfo()
@@ -418,6 +423,13 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 				return nil
 			}
 			m.stopTask(parts[2])
+
+		case "feedback":
+			if len(parts) < 4 {
+				m.messages = append(m.messages, chatMessage{Role: "system", Content: "Gunakan: /task feedback <id> <pesan>"})
+				return nil
+			}
+			m.feedbackTask(parts[2], strings.Join(parts[3:], " "))
 
 		default:
 			m.showTask(parts[1])
@@ -602,10 +614,6 @@ func (m *tuiModel) startTask(goal string) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m.taskRunners[id] = cancel
-
-	m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s dimulai: %s", id, goal)})
-	m.refreshViewport()
 
 	client := llm.NewClient(m.apiURL)
 	apiKey := os.Getenv("OPENCODE_API_KEY")
@@ -615,6 +623,11 @@ func (m *tuiModel) startTask(goal string) {
 	client.SetAPIKey(apiKey)
 
 	runner := task.NewRunner(m.proc.ExportToolRegistry(), m.apiURL, apiKey, m.currentModel, wd)
+
+	m.taskRunners[id] = &taskRunState{cancel: cancel, runner: runner}
+
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s dimulai: %s", id, goal)})
+	m.refreshViewport()
 
 	go func() {
 		runner.Run(ctx, plan, func(iteration int, desc string) {
@@ -646,10 +659,20 @@ func (m *tuiModel) listTasks() {
 }
 
 func (m *tuiModel) stopTask(id string) {
-	if cancel, ok := m.taskRunners[id]; ok {
-		cancel()
+	if state, ok := m.taskRunners[id]; ok {
+		state.cancel()
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s dihentikan.", id)})
 		delete(m.taskRunners, id)
+	} else {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s tidak ditemukan.", id)})
+	}
+	m.refreshViewport()
+}
+
+func (m *tuiModel) feedbackTask(id, msg string) {
+	if state, ok := m.taskRunners[id]; ok {
+		state.runner.SendFeedback(msg)
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Feedback untuk %s: %s", id, msg)})
 	} else {
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s tidak ditemukan.", id)})
 	}
