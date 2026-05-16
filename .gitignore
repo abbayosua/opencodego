@@ -10,3 +10,7 @@ internal/tool/tool_test.go.bak
 *.log
 err.txt
 out.txt
+err*.txt
+out*.txt
+test*.txt
+test*.json

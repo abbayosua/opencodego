@@ -15,6 +15,7 @@ import (
 	"github.com/opencode-go/opencode/internal/message"
 	"github.com/opencode-go/opencode/internal/session"
 	"github.com/opencode-go/opencode/internal/storage"
+	"github.com/opencode-go/opencode/internal/task"
 	"github.com/opencode-go/opencode/internal/telegram"
 	"github.com/opencode-go/opencode/internal/tool"
 )
@@ -91,6 +92,8 @@ type tuiModel struct {
 	tgInput       string
 	tgSavedTokens []*storage.BotToken
 	cancelSession context.CancelFunc
+	taskRunners map[string]context.CancelFunc
+	taskResults map[string]string
 }
 
 func initialModel() tuiModel {
@@ -98,7 +101,9 @@ func initialModel() tuiModel {
 		messages: []chatMessage{
 			{Role: "system", Content: "Welcome to OpenCode-Go! Type a prompt and press Enter to start."},
 		},
-		status: "Ready",
+		status:      "Ready",
+		taskRunners: make(map[string]context.CancelFunc),
+		taskResults: make(map[string]string),
 	}
 }
 
@@ -379,7 +384,7 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.status = fmt.Sprintf("API: %s", m.apiURL)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL)})
 	case "/help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /session         - Session info\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>     - Change model\n  /apiurl <url>    - Change API URL\n  /telegram        - Telegram bot\n  /session         - Session info\n  /task start/stop - Long running task\n  /help            - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C           - Quit"})
 
 	case "/session":
 		m.displaySessionInfo()
@@ -387,6 +392,36 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 	case "/telegram":
 		m.tgStep = 0
 		m.telegramListTokens()
+
+	case "/task":
+		if len(parts) < 2 {
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: "Gunakan:\n  /task start <goal>\n  /task list\n  /task stop <id>\n  /task <id>"})
+			return nil
+		}
+		sub := parts[1]
+
+		switch sub {
+		case "start":
+			goal := strings.Join(parts[2:], " ")
+			if goal == "" {
+				m.messages = append(m.messages, chatMessage{Role: "system", Content: "Gunakan: /task start <goal>"})
+				return nil
+			}
+			m.startTask(goal)
+
+		case "list":
+			m.listTasks()
+
+		case "stop":
+			if len(parts) < 3 {
+				m.messages = append(m.messages, chatMessage{Role: "system", Content: "Gunakan: /task stop <id>"})
+				return nil
+			}
+			m.stopTask(parts[2])
+
+		default:
+			m.showTask(parts[1])
+		}
 
 	default:
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Unknown: %s\nType /help", parts[0])})
@@ -549,6 +584,87 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 			toolCalls: result.ToolCalls,
 		}
 	}
+}
+
+func (m *tuiModel) startTask(goal string) {
+	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
+	plan := task.NewPlan(goal)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Error get workdir: %v", err)})
+		return
+	}
+
+	if err := task.SavePlan(wd, plan); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Error save plan: %v", err)})
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.taskRunners[id] = cancel
+
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s dimulai: %s", id, goal)})
+	m.refreshViewport()
+
+	client := llm.NewClient(m.apiURL)
+	apiKey := os.Getenv("OPENCODE_API_KEY")
+	if apiKey == "" {
+		apiKey = "public"
+	}
+	client.SetAPIKey(apiKey)
+
+	runner := task.NewRunner(m.proc.ExportToolRegistry(), m.apiURL, apiKey, m.currentModel, wd)
+
+	go func() {
+		runner.Run(ctx, plan, func(iteration int, desc string) {
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Iter %d: %s", iteration, desc)})
+			m.refreshViewport()
+		})
+
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s selesai!", id)})
+		m.taskResults[id] = plan.Evaluation
+		delete(m.taskRunners, id)
+		m.refreshViewport()
+	}()
+}
+
+func (m *tuiModel) listTasks() {
+	if len(m.taskRunners) == 0 && len(m.taskResults) == 0 {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Tidak ada task."})
+		return
+	}
+	msg := "Daftar task:\n"
+	for id := range m.taskRunners {
+		msg += fmt.Sprintf("  %s - running\n", id)
+	}
+	for id, result := range m.taskResults {
+		msg += fmt.Sprintf("  %s - selesai: %s\n", id, truncateStr(result, 80))
+	}
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
+	m.refreshViewport()
+}
+
+func (m *tuiModel) stopTask(id string) {
+	if cancel, ok := m.taskRunners[id]; ok {
+		cancel()
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s dihentikan.", id)})
+		delete(m.taskRunners, id)
+	} else {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s tidak ditemukan.", id)})
+	}
+	m.refreshViewport()
+}
+
+func (m *tuiModel) showTask(id string) {
+	if result, ok := m.taskResults[id]; ok {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s: %s", id, truncateStr(result, 500))})
+	} else if _, ok := m.taskRunners[id]; ok {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s sedang berjalan.", id)})
+	} else {
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Task %s tidak ditemukan.", id)})
+	}
+	m.refreshViewport()
 }
 
 func CleanProgressMessages(msgs []chatMessage) []chatMessage {
