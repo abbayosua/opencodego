@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -79,6 +81,7 @@ type tuiModel struct {
 	lastError    string
 	currentModel string
 	apiURL       string
+	apiKey       string
 	hasAPIKey    bool
 
 	progressList []string
@@ -129,6 +132,9 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	if apiKey != "" {
 		client.SetAPIKey(apiKey)
 	}
+	if apiKey == "" {
+		apiKey = "public"
+	}
 
 	system := "You are a helpful AI assistant with access to tools."
 	proc := session.NewProcessor(reg, client, store, eventBus, modelName, system)
@@ -140,6 +146,7 @@ func Run(reg *tool.Registry, modelName, apiURL, apiKey string) error {
 	initModel.eventBus = eventBus
 	initModel.currentModel = modelName
 	initModel.apiURL = apiURL
+	initModel.apiKey = apiKey
 	initModel.hasAPIKey = apiKey != ""
 	initModel.status = fmt.Sprintf("Model: %s | %s", modelName, apiURL)
 	initModel.vp = viewport.New(80, 20)
@@ -374,12 +381,31 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 	switch parts[0] {
 	case "/model":
 		if len(parts) < 2 {
-			m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Current model: %s", m.currentModel)})
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Current: %s\n\nGunakan /model list atau /model <name>", m.currentModel)})
+			return nil
+		}
+		if parts[1] == "list" {
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: "Mengambil daftar model..."})
+			m.refreshViewport()
+			go m.fetchModelList()
 			return nil
 		}
 		m.currentModel = parts[1]
 		m.status = fmt.Sprintf("Model: %s", m.currentModel)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Model changed to %s", m.currentModel)})
+	case "/apikey":
+		if len(parts) < 2 {
+			masked := ""
+			if len(m.apiKey) > 8 {
+				masked = m.apiKey[:4] + "..." + m.apiKey[len(m.apiKey)-4:]
+			}
+			m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Current API key: %s\nGunakan: /apikey <key>", masked)})
+			return nil
+		}
+		m.apiKey = parts[1]
+		m.hasAPIKey = m.apiKey != ""
+		m.status = "API key updated"
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "API key updated"})
 	case "/apiurl":
 		if len(parts) < 2 {
 			m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("Current API URL: %s", m.apiURL)})
@@ -389,7 +415,7 @@ func (m *tuiModel) handleCommand(input string) tea.Cmd {
 		m.status = fmt.Sprintf("API: %s", m.apiURL)
 		m.messages = append(m.messages, chatMessage{Role: "system", Content: fmt.Sprintf("API URL changed to %s", m.apiURL)})
 	case "/help":
-		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>       - Change model\n  /apiurl <url>      - Change API URL\n  /telegram          - Telegram bot\n  /session           - Session info\n  /task start <goal> - Start long running task\n  /task list         - List tasks\n  /task stop <id>    - Stop task\n  /task feedback <id> <msg> - Send feedback\n  /help              - Show this\n  pgup/pgdn/home/end - Scroll\n  Ctrl+C             - Quit"})
+		m.messages = append(m.messages, chatMessage{Role: "system", Content: "Commands:\n  /model <name>|list - Change or list models\n  /apiurl <url>        - Change API URL\n  /apikey <key>        - Change API key\n  /telegram            - Telegram bot\n  /session             - Session info\n  /task start/stop     - Long running task\n  /help                - Show this\n  pgup/pgdn/home/end   - Scroll\n  Ctrl+C               - Quit"})
 
 	case "/session":
 		m.displaySessionInfo()
@@ -449,11 +475,19 @@ func (m *tuiModel) displaySessionInfo() {
 		sessionID = "TUI-" + time.Now().Format("0102-150405")
 	}
 
-	msg := fmt.Sprintf("📋 *Session Info*\n\nSession ID: %s\nChat messages: %d\nModel: %s\nHistory turns: %d",
+	maskedKey := ""
+	if len(m.apiKey) > 8 {
+		maskedKey = m.apiKey[:4] + ".." + m.apiKey[len(m.apiKey)-4:]
+	} else if m.apiKey != "" {
+		maskedKey = "set"
+	}
+
+	msg := fmt.Sprintf("📋 *Session Info*\n\nSession ID: %s\nChat messages: %d\nModel: %s\nAPI: %s\nKey: %s",
 		sessionID,
 		len(m.messages),
 		m.currentModel,
-		len(m.chatHistory),
+		m.apiURL,
+		maskedKey,
 	)
 
 	if m.tgActive {
@@ -462,6 +496,56 @@ func (m *tuiModel) displaySessionInfo() {
 		msg += "\n\n🤖 *Telegram Bot*: Nonaktif (/telegram untuk mulai)"
 	}
 
+	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
+	m.refreshViewport()
+	m.vp.GotoBottom()
+}
+
+func (m *tuiModel) fetchModelList() {
+	key := m.apiKey
+	if key == "" {
+		key = "public"
+	}
+
+	req, _ := http.NewRequest("GET", "https://opencode.ai/zen/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("HTTP-Referer", "https://opencode.ai/")
+	req.Header.Set("X-Title", "opencode")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal fetch model: %v", err)})
+		m.refreshViewport()
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name,omitempty"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		m.messages = append(m.messages, chatMessage{Role: "error", Content: fmt.Sprintf("Gagal parse model: %v", err)})
+		m.refreshViewport()
+		return
+	}
+
+	msg := "Available models:\n"
+	for i, model := range result.Data {
+		if i >= 30 {
+			msg += fmt.Sprintf("... dan %d lainnya\n", len(result.Data)-30)
+			break
+		}
+		name := model.Name
+		if name == "" {
+			name = model.ID
+		}
+		msg += fmt.Sprintf("  %s\n", model.ID)
+	}
+	msg += "\nGunakan: /model <name>"
 	m.messages = append(m.messages, chatMessage{Role: "system", Content: msg})
 	m.refreshViewport()
 	m.vp.GotoBottom()
@@ -568,11 +652,11 @@ func (m *tuiModel) runSession(prompt string) tea.Cmd {
 		m.cancelSession = cancel
 
 		client := llm.NewClient(m.apiURL)
-		apiKey := os.Getenv("OPENCODE_API_KEY")
-		if apiKey == "" {
-			apiKey = "public"
+		key := m.apiKey
+		if key == "" {
+			key = "public"
 		}
-		client.SetAPIKey(apiKey)
+		client.SetAPIKey(key)
 		system := "You are a helpful AI assistant with access to tools."
 		store, err := storage.NewSQLiteStore(fmt.Sprintf("%s%copencode-tui.db", os.TempDir(), os.PathSeparator))
 		if err != nil {
@@ -616,13 +700,13 @@ func (m *tuiModel) startTask(goal string) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client := llm.NewClient(m.apiURL)
-	apiKey := os.Getenv("OPENCODE_API_KEY")
-	if apiKey == "" {
-		apiKey = "public"
+	key := m.apiKey
+	if key == "" {
+		key = "public"
 	}
-	client.SetAPIKey(apiKey)
+	client.SetAPIKey(key)
 
-	runner := task.NewRunner(m.proc.ExportToolRegistry(), m.apiURL, apiKey, m.currentModel, wd)
+	runner := task.NewRunner(m.proc.ExportToolRegistry(), m.apiURL, key, m.currentModel, wd)
 
 	m.taskRunners[id] = &taskRunState{cancel: cancel, runner: runner}
 
