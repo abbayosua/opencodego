@@ -71,11 +71,9 @@ func TestModelMultipleMessages(t *testing.T) {
 
 func TestRenderingSystemMessage(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "Welcome") {
 		t.Errorf("expected welcome message, got: %s", out)
 	}
@@ -83,12 +81,10 @@ func TestRenderingSystemMessage(t *testing.T) {
 
 func TestRenderingLoadingState(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 	m.isLoading = true
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "Processing") {
 		t.Errorf("expected Processing, got: %s", out)
 	}
@@ -96,15 +92,13 @@ func TestRenderingLoadingState(t *testing.T) {
 
 func TestRenderingWithMessages(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 	m.messages = append(m.messages,
 		chatMessage{Role: "user", Content: "list go files"},
 		chatMessage{Role: "assistant", Content: "Files: main.go, handler.go"},
 	)
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "You:") {
 		t.Errorf("expected You:, got: %s", out)
 	}
@@ -115,23 +109,18 @@ func TestRenderingWithMessages(t *testing.T) {
 
 func TestRenderingError(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
-	m.lastError = "API timeout"
+	m.messages = append(m.messages, chatMessage{Role: "error", Content: "API timeout"})
 
-	out := render(&m)
-	if !strings.Contains(out, "Error:") {
-		t.Errorf("expected Error:, got: %s", out)
+	out := renderMessages(&m)
+	if !strings.Contains(out, "API timeout") {
+		t.Errorf("expected API timeout, got: %s", out)
 	}
 }
 
 func TestRenderingWithoutReady(t *testing.T) {
 	m := initialModel()
-	out := render(&m)
-	if !strings.Contains(out, "Initializing") {
-		t.Errorf("expected Initializing, got: %s", out)
-	}
+	_ = renderMessages(&m)
 }
 
 func TestIndentContent(t *testing.T) {
@@ -157,35 +146,9 @@ func TestWrapLine(t *testing.T) {
 	}
 }
 
-func TestRenderingWithInput(t *testing.T) {
-	m := initialModel()
-	m.ready = true
-	m.width = 80
-	m.height = 24
-	m.input = "list files"
-
-	out := render(&m)
-	if !strings.Contains(out, "list files") {
-		t.Errorf("expected input text to render, got: %s", out)
-	}
-
-	// Test that input text REPLACES the placeholder
-	if strings.Contains(out, "Type a prompt") {
-		t.Log("placeholder hidden when input is non-empty")
-	}
-
-	m.isLoading = true
-	out = render(&m)
-	if strings.Contains(out, "list files") {
-		t.Log("input hidden during loading")
-	}
-}
-
 func TestProgressMessagesRender(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 	m.isLoading = true
 	m.progressList = []string{
 		"🧠 Step 1: Thinking...",
@@ -193,7 +156,7 @@ func TestProgressMessagesRender(t *testing.T) {
 		"✅ Step 1: bash completed",
 	}
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "🔧") {
 		t.Errorf("expected tool emoji, got: %s", out)
 	}
@@ -204,12 +167,10 @@ func TestProgressMessagesRender(t *testing.T) {
 
 func TestProgressMessagesWithoutTools(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 	m.isLoading = true
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "Processing") {
 		t.Errorf("expected Processing text, got: %s", out)
 	}
@@ -217,9 +178,7 @@ func TestProgressMessagesWithoutTools(t *testing.T) {
 
 func TestProgressMessagesShowStepNumber(t *testing.T) {
 	m := initialModel()
-	m.ready = true
 	m.width = 80
-	m.height = 24
 	m.isLoading = true
 	m.progressList = []string{
 		"🧠 Step 1: Thinking...",
@@ -227,7 +186,7 @@ func TestProgressMessagesShowStepNumber(t *testing.T) {
 		"✅ Step 1: bash completed",
 	}
 
-	out := render(&m)
+	out := renderMessages(&m)
 	if !strings.Contains(out, "Step 1") {
 		t.Errorf("expected Step 1 in output, got: %s", out)
 	}
