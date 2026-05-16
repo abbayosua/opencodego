@@ -1,0 +1,7 @@
+File `test123.txt` has been created with the specified content. Here's what it contains:
+
+```
+test --log-level DEBUG --log-file testbody2.log
+```
+
+Total: 47 bytes.

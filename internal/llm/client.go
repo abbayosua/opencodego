@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/opencode-go/opencode/internal/log"
 	"github.com/opencode-go/opencode/internal/message"
 )
 
@@ -129,6 +130,10 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan Event, <
 		if err != nil {
 			errs <- fmt.Errorf("marshal request: %w", err)
 			return
+		}
+
+		if log.Default.Enabled(log.LevelDebug) {
+			log.Debug("llm.request.body", "body", string(bodyJSON))
 		}
 
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
@@ -356,8 +361,36 @@ func buildOpenAIBody(req StreamRequest) map[string]any {
 		}
 	}
 
+	// Filter orphaned tool messages (no preceding assistant with matching tool_call_id)
+	var validMsgs []openAIChatMessage
+	var pendingIDs []string
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				pendingIDs = append(pendingIDs, tc.ID)
+			}
+			validMsgs = append(validMsgs, m)
+		} else if m.Role == "tool" {
+			found := false
+			for i, id := range pendingIDs {
+				if id == m.ToolCallID {
+					pendingIDs = append(pendingIDs[:i], pendingIDs[i+1:]...)
+					found = true
+					break
+				}
+			}
+			if found {
+				validMsgs = append(validMsgs, m)
+			} else {
+				log.Debug("skipping orphaned tool message", "tool_call_id", m.ToolCallID)
+			}
+		} else {
+			validMsgs = append(validMsgs, m)
+		}
+	}
+	msgs = validMsgs
+
 	// Always inject reasoning_content on ALL assistant messages
-	// DeepSeek (including big-pickle) requires it on every assistant message
 	for i := range msgs {
 		if msgs[i].Role == "assistant" && msgs[i].ReasoningContent == nil {
 			empty := ""
