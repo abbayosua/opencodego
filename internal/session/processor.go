@@ -355,21 +355,22 @@ func (p *Processor) publishAgentCompleted(agentName, sessionID string) {
 }
 
 func (p *Processor) createSessionRecord(id, projectID, prompt string) *storage.Session {
-	ctx := context.Background()
-	s, err := p.store.CreateSession(ctx, storage.CreateSessionInput{
-		ID:        id,
-		ProjectID: projectID,
-		Title:     truncate(prompt, 80),
-		Model:     p.model,
-		Agent:     "default",
-	})
-	if err != nil {
-		return &storage.Session{
-			ID: id, ProjectID: projectID,
-			Title: truncate(prompt, 80), Model: p.model, Agent: "default",
+	if p.store != nil {
+		s, err := p.store.CreateSession(context.Background(), storage.CreateSessionInput{
+			ID:        id,
+			ProjectID: projectID,
+			Title:     truncate(prompt, 80),
+			Model:     p.model,
+			Agent:     "default",
+		})
+		if err == nil {
+			return s
 		}
 	}
-	return s
+	return &storage.Session{
+		ID: id, ProjectID: projectID,
+		Title: truncate(prompt, 80), Model: p.model, Agent: "default",
+	}
 }
 
 func (p *Processor) saveUserMessage(sessionID string, turn int, prompt string) error {

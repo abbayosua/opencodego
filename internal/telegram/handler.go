@@ -76,7 +76,14 @@ func (b *Bot) handlePrompt(ctx context.Context, chatID int64, prompt string) {
 	system := "You are a helpful AI assistant with access to tools."
 	eventBus := bus.New()
 
-	proc := session.NewProcessor(b.reg, client, nil, eventBus, cs.Model, system)
+	store, err := storage.NewInMemoryStore()
+	if err != nil {
+		b.sendText(ctx, chatID, fmt.Sprintf("Storage error: %v", err))
+		return
+	}
+	defer store.Close()
+
+	proc := session.NewProcessor(b.reg, client, store, eventBus, cs.Model, system)
 	proc.EnableSubAgents()
 
 	start := time.Now()
